@@ -1,0 +1,76 @@
+version: '3.8'
+
+services:
+  rlrp_demo:
+    build: .
+    container_name: rlrp_demo
+    volumes:
+      - ./results:/app/results
+    # Keeps the console attached and formats the terminal output correctly
+    stdin_open: true
+    tty: true
+    command: ["python", "rlrp_smsemoa/run_demo.py", "--outdir", "/app/results/demo"]
+
+  rlrp_full:
+    build: .
+    container_name: rlrp_full
+    volumes:
+      - ./results:/app/results
+    # Keeps the console attached and formats the terminal output correctly
+    stdin_open: true
+    tty: true
+    # Dynamically calculates (Total Cores - 2) and passes it to the script
+    command: >
+      bash -c '
+      CORES=$$(python -c "import os; print(max(1, os.cpu_count() - 2))");
+      echo "Starting experiment... Allocating $$CORES processes to leave 2 cores free.";
+      python rlrp_smsemoa/run_full_experiment.py \
+        --problems all \
+        --n_seeds 30 \
+        --t_max 100000 \
+        --mu 100 \
+        --processes $$CORES \
+        --outdir /app/results/full
+      '
+
+  test_dtlz1:
+    build: .
+    container_name: test_dtlz1
+    volumes:
+      - ./results:/app/results
+    command: >
+      python rlrp_smsemoa/run_full_experiment.py
+      --problems dtlz1
+      --n_seeds 30
+      --t_max 100000
+      --mu 100
+      --processes 10
+      --outdir /app/results/dtlz1
+
+  test_dtlz2:
+    build: .
+    container_name: test_dtlz2
+    volumes:
+      - ./results:/app/results
+    command: >
+      python rlrp_smsemoa/run_full_experiment.py
+      --problems dtlz2
+      --n_seeds 30
+      --t_max 100000
+      --mu 100
+      --processes 10
+      --outdir /app/results/dtlz2
+
+  test_dtlz7:
+    build: .
+    container_name: test_dtlz7
+    volumes:
+      - ./results:/app/results
+    command: >
+      python rlrp_smsemoa/run_full_experiment.py
+      --problems dtlz7
+      --n_seeds 30
+      --t_max 100000
+      --mu 100
+      --processes 10
+      --outdir /app/results/dtlz7
