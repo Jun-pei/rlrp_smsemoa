@@ -1,41 +1,49 @@
 """
 run_full_experiment.py
-=======================
-CLI to reproduce the comparison protocol of Section 5.3 of the proposal:
-4 configurations x 30 independent runs per problem, over the 8 problems of
-Cuadro 1, plus the sensitivity sweeps of Section 5.3 (W, mu, rho).
+======================
+CLI for the comparison protocol: n_methods x n_seeds runs per problem, with
+every generation logged to disk and the Section-5.3 statistics computed on the
+Definition-D1..D9 indicators of performance.py.
 
-IMPORTANT PERFORMANCE NOTE
----------------------------
-Cuadro 1 specifies 100,000 *function evaluations* per run. Because this is a
-*steady-state* EMOA (one offspring per generation), that is ~100,000
-generations. Each generation's SMS-EMOA elimination step calls the exact
-hypervolume indicator O(|worst front|) times, and the RL planner's state
-computation (g_hat, Riesz energy) costs O(mu^2) for the pairwise distances.
-In pure Python/numpy this is too slow to run 8 x 4 x 30 x 100,000 generations
-in a chat sandbox -- a single (problem, method, seed) run at mu=100 over
-100,000 generations takes on the order of tens of minutes on a laptop, and
-the full grid is ~960 such runs. This script is built to run that exact
-protocol on a real machine (with --processes > 1 it parallelizes across
-seeds); for the sandbox demo, use run_demo.py or pass small --t_max/--mu
-overrides here, e.g.:
+Problem-set shortcuts for ``--problems``:
+    table1  the 8 problems of Cuadro 1 (with the REAL IMOP3/IMOP8)
+    imop    the full IMOP1..IMOP8 suite
+    all     everything registered
+
+Examples
+--------
+Smoke test (a couple of minutes)::
 
     python3 run_full_experiment.py --problems dtlz2 --n_seeds 3 \\
-        --t_max 1000 --mu 30 --processes 1
+        --t_max 1000 --mu 30 --eval_every 25 --outdir results/smoke
 
-For the full Cuadro 1 protocol on your own hardware:
+Full IMOP suite, 30 seeds, on a real machine::
 
-    python3 run_full_experiment.py --problems all --n_seeds 30 \\
-        --t_max 100000 --mu 100 --processes 8 --outdir results/
+    python3 run_full_experiment.py --problems imop --n_seeds 30 \\
+        --t_max 100000 --mu 100 --eval_every 500 --processes 32 \\
+        --outdir results/imop --histdir results/imop/history
 
-Outputs one CSV per problem (raw per-seed indicator values) plus a combined
-``summary.csv`` with means/stds and a ``stats.txt`` with the Wilcoxon
-(Bonferroni-corrected), Friedman, and Quade test results requested in
-Sec. 5.3.
+COST MODEL -- READ BEFORE LAUNCHING
+-----------------------------------
+This is a STEADY-STATE EMOA: one offspring per generation, so T_max
+generations ~= T_max function evaluations.  Per generation the cost is
+
+  (a) SMS-EMOA elimination: O(|worst front|) exact HV calls   <- always paid
+  (b) the RL state (energy, curvature, HV): O(mu^2) distances <- RL-RP only
+  (c) HVR + IGD+ against the reference set Z: O(mu * |Z|)     <- eval_every
+
+(c) is by far the largest term when eval_every = 1: IGD+ against a 5,000-point
+Z, 100,000 times per run, costs much more than the search itself.
+``--record_every 1 --eval_every 500`` still logs EVERY generation (z_ref,
+sigma, regime, reward, state features, cheap indicators) while evaluating the
+expensive external indicators 500x less often -- 200 points on the anytime
+curve, which is plenty for Definition D4.  Use ``--eval_every 1`` only for
+short diagnostic runs.
 """
 from __future__ import annotations
 import sys as _sys, os as _os
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 import argparse
 import os
 import sys
@@ -45,91 +53,147 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import numpy as np
 import pandas as pd
 
-from rlrp_smsemoa.problems import PROBLEM_NAMES
-from rlrp_smsemoa.experiment import run_single, sample_true_front
+from rlrp_smsemoa.problems import PROBLEM_NAMES, TABLE1_NAMES, IMOP_SUITE, problem_n_obj
+from rlrp_smsemoa.experiment import run_single, get_frame, add_time_to_target
+from rlrp_smsemoa.algorithm import METHODS
 from rlrp_smsemoa.stats import wilcoxon_bonferroni, friedman_test, quade_test
 
+#: (indicator column, higher_is_better)
+INDICATORS = [("hvr_final", True), ("igd_plus_final", False),
+              ("energy_ratio_final", False), ("hvr_anytime", True)]
 
-def _job(problem_name, method_name, seed, t_max, mu, m, true_front):
-    res = run_single(problem_name, method_name, seed, t_max, m=m, mu=mu, true_front=true_front)
-    return {k: v for k, v in res.items() if k not in ("X", "F", "history")}
+
+def expand(names):
+    if names == ["table1"]:
+        return list(TABLE1_NAMES)
+    if names == ["imop"]:
+        return list(IMOP_SUITE)
+    if names == ["all"]:
+        return list(PROBLEM_NAMES)
+    return names
 
 
-def run_problem(problem_name, methods, n_seeds, t_max, mu, m, processes, true_front_samples):
-    true_front = sample_true_front(problem_name, m=m, n_samples=true_front_samples)
-    jobs = [(problem_name, method, seed, t_max, mu, m, true_front)
-            for method in methods for seed in range(n_seeds)]
-    rows = []
-    t0 = time.time()
-    if processes <= 1:
+def _job(kw):
+    return run_single(**kw)
+
+
+def run_problem(pname, methods, n_seeds, args):
+    m_eff = problem_n_obj(pname, args.m)
+    get_frame(pname, m=m_eff, n_points=args.ref_points)     # warm the cache
+    jobs = [dict(problem_name=pname, method_name=meth, seed=s, t_max=args.t_max,
+                 m=m_eff, mu=args.mu, histdir=args.histdir,
+                 eval_every=args.eval_every, record_every=args.record_every,
+                 reward_hv=args.reward_hv, zref_max=args.zref_max,
+                 geometry_mode=args.geometry_mode, n_bins_fine=args.n_bins_fine,
+                 n_bins_coarse=args.n_bins_coarse)
+            for meth in methods for s in range(n_seeds)]
+    rows, t0 = [], time.time()
+    if args.processes <= 1:
         for j in jobs:
-            rows.append(_job(*j))
-            print(f"  [{problem_name}] {j[1]:20s} seed={j[2]:<3d} "
-                  f"done ({time.time() - t0:6.1f}s elapsed)", file=sys.stderr)
+            rows.append(_job(j))
+            print(f"  [{pname}] {j['method_name']:20s} seed={j['seed']:<3d} "
+                  f"({time.time() - t0:7.1f}s)", file=sys.stderr)
     else:
-        with ProcessPoolExecutor(max_workers=processes) as ex:
-            futs = {ex.submit(_job, *j): j for j in jobs}
+        with ProcessPoolExecutor(max_workers=args.processes) as ex:
+            futs = {ex.submit(_job, j): j for j in jobs}
             for fut in as_completed(futs):
                 j = futs[fut]
                 rows.append(fut.result())
-                print(f"  [{problem_name}] {j[1]:20s} seed={j[2]:<3d} "
-                      f"done ({time.time() - t0:6.1f}s elapsed)", file=sys.stderr)
+                print(f"  [{pname}] {j['method_name']:20s} seed={j['seed']:<3d} "
+                      f"({time.time() - t0:7.1f}s)", file=sys.stderr)
     return pd.DataFrame(rows)
+
+
+def write_stats(full, problems, methods, outdir):
+    with open(os.path.join(outdir, "stats.txt"), "w") as fh:
+        for pname in problems:
+            sub = full[full["problem"] == pname]
+            if sub.empty:
+                continue
+            for col, higher_better in INDICATORS:
+                try:
+                    piv = sub.pivot(index="seed", columns="method", values=col)
+                except ValueError:
+                    continue
+                cols = [c for c in methods if c in piv.columns]
+                mat = piv[cols].to_numpy(dtype=float)
+                if mat.shape[0] < 3 or not np.isfinite(mat).all():
+                    continue
+                # every test below is written for HIGHER-IS-BETTER
+                signed = mat if higher_better else -mat
+                fh.write(f"\n=== {pname} : {col} "
+                         f"({'higher' if higher_better else 'lower'} is better) ===\n")
+                fr = friedman_test(signed, cols)
+                fh.write(f"Friedman: stat={fr['stat']:.4f} p={fr['p']:.4g} "
+                         f"ranks={ {k: round(v, 3) for k, v in fr['avg_ranks'].items()} }\n")
+                qd = quade_test(signed, cols)
+                fh.write(f"Quade:    stat={qd['stat']:.4f} p={qd['p']:.4g} "
+                         f"ranks={ {k: round(v, 3) for k, v in qd['avg_ranks'].items()} }\n")
+                for pair, r in wilcoxon_bonferroni(signed, cols).items():
+                    fh.write(f"  Wilcoxon {pair[0]} vs {pair[1]}: p_adj={r['p_adj']:.4g} "
+                             f"effect={r['effect_size']:+.3f} winner={r['winner']}\n")
+
+
+def _iqr(x):
+    x = np.asarray(x, dtype=float)
+    x = x[np.isfinite(x)]
+    return float(np.percentile(x, 75) - np.percentile(x, 25)) if x.size else np.nan
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
-                                  formatter_class=argparse.RawDescriptionHelpFormatter)
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--problems", nargs="+", default=["dtlz2"],
-                     help=f"Problem names or 'all'. Options: {PROBLEM_NAMES}")
-    ap.add_argument("--methods", nargs="+", default=None,
-                     help="Subset of methods (default: all 4)")
+                    help="names, or one of: table1 | imop | all")
+    ap.add_argument("--methods", nargs="+", default=None)
     ap.add_argument("--n_seeds", type=int, default=30)
-    ap.add_argument("--t_max", type=int, default=100_000,
-                     help="Generations (~= function evaluations for steady-state EMOA)")
+    ap.add_argument("--t_max", type=int, default=100_000)
     ap.add_argument("--mu", type=int, default=100)
-    ap.add_argument("--m", type=int, default=3)
+    ap.add_argument("--m", type=int, default=3, help="ignored for the IMOP suite")
     ap.add_argument("--processes", type=int, default=1)
-    ap.add_argument("--true_front_samples", type=int, default=5000)
-    ap.add_argument("--outdir", default=".")
+    ap.add_argument("--ref_points", type=int, default=5000, help="|Z| for IGD+")
+    ap.add_argument("--eval_every", type=int, default=500,
+                    help="how often HVR/IGD+/Eratio are computed (see COST MODEL)")
+    ap.add_argument("--record_every", type=int, default=1,
+                    help="how often a generation row is logged (1 = all of them)")
+    ap.add_argument("--reward_hv", choices=["fixed", "adaptive"], default="fixed")
+    ap.add_argument("--zref_max", type=float, default=10.0)
+    ap.add_argument("--geometry_mode", choices=["curvature", "contour", "both"],
+                    default="curvature")
+    ap.add_argument("--n_bins_fine", type=int, default=5)
+    ap.add_argument("--n_bins_coarse", type=int, default=3)
+    ap.add_argument("--outdir", default="results")
+    ap.add_argument("--histdir", default=None,
+                    help="where per-generation histories go (default <outdir>/history)")
     args = ap.parse_args()
 
-    problems = PROBLEM_NAMES if args.problems == ["all"] else args.problems
+    problems = expand(args.problems)
+    methods = args.methods or list(METHODS)
     os.makedirs(args.outdir, exist_ok=True)
+    if args.histdir is None:
+        args.histdir = os.path.join(args.outdir, "history")
+    os.makedirs(args.histdir, exist_ok=True)
 
     all_dfs = []
     for pname in problems:
-        print(f"=== Running {pname} ({args.n_seeds} seeds x "
-              f"{len(args.methods) if args.methods else 4} methods, Tmax={args.t_max}) ===")
-        df = run_problem(pname, args.methods, args.n_seeds, args.t_max, args.mu, args.m,
-                          args.processes, args.true_front_samples)
+        m_eff = problem_n_obj(pname, args.m)
+        print(f"=== {pname} (m={m_eff}, {args.n_seeds} seeds x {len(methods)} "
+              f"methods, T_max={args.t_max}) ===")
+        df = run_problem(pname, methods, args.n_seeds, args)
         df.to_csv(os.path.join(args.outdir, f"results_{pname}.csv"), index=False)
         all_dfs.append(df)
 
     full = pd.concat(all_dfs, ignore_index=True)
+    full = add_time_to_target(full, args.histdir)
     full.to_csv(os.path.join(args.outdir, "all_results.csv"), index=False)
 
-    summary = full.groupby(["problem", "method"])[
-        ["hv_ext_far_final", "hv_ext_near_final", "igd_plus_final", "riesz_log_final"]
-    ].agg(["mean", "std"])
+    cols = [c for c, _ in INDICATORS] + ["time_to_target"]
+    summary = full.groupby(["problem", "method"])[cols].agg(["median", _iqr])
     summary.to_csv(os.path.join(args.outdir, "summary.csv"))
     print(summary.to_string(float_format=lambda x: f"{x:.4f}"))
 
-    # Statistical tests per problem, on the primary indicator (HV, far PR)
-    with open(os.path.join(args.outdir, "stats.txt"), "w") as fh:
-        for pname in problems:
-            sub = full[full["problem"] == pname]
-            methods = sorted(sub["method"].unique())
-            mat = sub.pivot(index="seed", columns="method", values="hv_ext_far_final")[methods].values
-            fh.write(f"\n=== {pname} : HV (external, far PR) ===\n")
-            fr = friedman_test(mat, methods)
-            fh.write(f"Friedman: stat={fr['stat']:.4f} p={fr['p']:.4g} ranks={fr['avg_ranks']}\n")
-            qd = quade_test(mat, methods)
-            fh.write(f"Quade:    stat={qd['stat']:.4f} p={qd['p']:.4g} ranks={qd['avg_ranks']}\n")
-            wb = wilcoxon_bonferroni(mat, methods)
-            for pair, r in wb.items():
-                fh.write(f"  Wilcoxon {pair}: p_adj={r['p_adj']:.4g} sig={r['significant']}\n")
-    print(f"\nWrote results to {args.outdir}")
+    write_stats(full, problems, methods, args.outdir)
+    print(f"\nWrote results to {args.outdir} (histories in {args.histdir})")
 
 
 if __name__ == "__main__":

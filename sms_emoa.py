@@ -112,7 +112,16 @@ def sms_emoa_eliminate(X: np.ndarray, F_raw: np.ndarray, zref: np.ndarray,
     else:
         F_norm = normalize(F_raw[worst], ideal, nadir)
         contrib = hv_contributions(F_norm, zref)
-        drop = worst[np.argmin(contrib)]
+        if not np.any(contrib > 0):
+            # No member of the worst front dominates z_ref, so every HV
+            # contribution is exactly 0 and argmin would deterministically
+            # return index 0 -- i.e. selection would silently degenerate into
+            # "always delete the first individual".  Fall back to the standard
+            # secondary criterion: drop the point furthest from the ideal in
+            # the normalised frame.
+            drop = worst[int(np.argmax(F_norm.sum(axis=1)))]
+        else:
+            drop = worst[int(np.argmin(contrib))]
     keep = np.ones(X.shape[0], dtype=bool)
     keep[drop] = False
     return X[keep], F_raw[keep]

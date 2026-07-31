@@ -1,61 +1,48 @@
 """
 problems.py
 ===========
-The eight test problems of Cuadro 1 in the proposal:
+Problem registry and, crucially, the **reference sets Z** used for IGD+.
 
-    DTLZ1, DTLZ2, Minus-DTLZ1, Minus-DTLZ2, WFG4, WFG9, IMOP3, IMOP8
+Suites available
+----------------
+    DTLZ1, DTLZ2, DTLZ7          (pymoo, m free)
+    Minus-DTLZ1, Minus-DTLZ2     (negation, Ishibuchi et al.)
+    WFG4, WFG9                   (pymoo, m free)
+    IMOP1 ... IMOP8              (faithful port of PlatEMO, see imop.py;
+                                  m fixed by the benchmark: 2,2,2,3,3,3,3,3)
 
-DTLZ1/2 and WFG4/9 are taken verbatim from pymoo's built-in problem suite
-(``pymoo.problems.get_problem``), with the number of decision variables set
-to match Cuadro 1 (n=7 for DTLZ1, n=12 for DTLZ2, n=14 for WFG4/9).
+Reference sets (review comment: *IGD+ - conjunto de referencia? cual usas?*)
+---------------------------------------------------------------------------
+``reference_set(name, m, n_points)`` returns an ANALYTICAL sample of PF(P):
 
-Minus-DTLZ1/2 follow the standard "minus" construction of Ishibuchi et al.
-(CEC 2018 / PPSN 2018, referenced as [7, 8] in the proposal): the objectives
-of the corresponding DTLZ problem are simply negated, f_i^minus(x) =
--f_i^DTLZ(x), which inverts the front (concave <-> convex, and pushes the
-HV-optimal distributions towards the boundary instead of the interior).
+  * DTLZ / WFG : pymoo's closed-form ``pareto_front(ref_dirs)`` evaluated on a
+    Das-Dennis simplex lattice.  For m = 3 the default H_Z = 99 gives
+    |Z| = 5050 points.
+  * Minus-DTLZ : the negation of the corresponding DTLZ reference set, which
+    is exactly PF of the minus problem by construction.
+  * IMOP       : the ``GetOptimum`` sampler of the original MATLAB code,
+    ported in imop.py.
 
-IMOP3 / IMOP8
--------------
-IMPORTANT HONESTY NOTE: the official IMOP suite (Tian et al., IEEE CIM 2019,
-ref. [12]) is *not* shipped with pymoo, and its exact closed-form MATLAB
-source (PlatEMO ``IMOP3.m`` / ``IMOP8.m``) could not be verified verbatim in
-this environment. The official IMOP3 is in fact a 2-objective problem (a
-1-D discontinuous curve), while the proposal's Cuadro 1 calls for a
-3-objective version (n = (m-1) + l = 2 + 5 = 7), which does not match the
-literature's IMOP3. Rather than silently fabricate a "verbatim" port that
-might be wrong, this module implements two *custom* 3-objective problems
-that reproduce the qualitative property each PlatEMO problem is famous for:
-
-  * ``IMOP3Like``: a spherical (DTLZ2-style) front with a *non-linear
-    density-bias* transform x_i' = x_i^a (a << 1) applied to the position
-    variables, exactly the mechanism the real IMOP suite uses (parameters
-    a1, a2, a3 in the original paper) to concentrate solutions unevenly
-    over an otherwise-regular front.
-  * ``IMOP8Like``: a *multi-segment* front, built by partitioning decision
-    space into three regions that each map to a different local geometry
-    (linear / concave / convex), producing genuine discontinuities between
-    segments, again matching the qualitative description used in the
-    proposal ("convexa, concava y lineal... dentro del mismo problema").
-
-If bit-exact reproduction of the published IMOP benchmark is required
-(e.g. for publication), replace ``IMOP3Like``/``IMOP8Like`` with a direct
-port of PlatEMO's ``IMOP3.m``/``IMOP8.m`` (https://github.com/BIMK/PlatEMO,
-folder ``PlatEMO/Problems/IMOP``) -- the rest of this codebase only depends
-on the generic ``Problem`` interface (``n_var``, ``n_obj``, ``xl``, ``xu``,
-``evaluate(X)``) and is agnostic to how the front is generated.
+The previous implementation instead used a Dirichlet/spherical *guess* for
+DTLZ and, for WFG and IMOP, **random sampling of decision space followed by a
+non-dominated filter**.  The latter is not a sample of the Pareto front: for a
+14-variable WFG problem, uniform random sampling essentially never reaches
+g = 0, so IGD+ was being measured against a set floating well above the true
+front -- the reported IGD+ values were therefore not IGD+ at all.  Every
+reference set produced here is checked in ``tests_reference_sets.py``.
 """
 
 from __future__ import annotations
 import numpy as np
 from pymoo.problems import get_problem as _pymoo_get_problem
+from pymoo.util.ref_dirs import get_reference_directions
 
 
 # --------------------------------------------------------------------------
-# Generic problem interface used throughout the codebase
+# Generic problem interface
 # --------------------------------------------------------------------------
 class Problem:
-    """Minimal problem interface: evaluate(X) -> F, with X, F as 2D arrays."""
+    """Minimal interface: ``evaluate(X) -> F`` with X, F 2-D arrays."""
 
     def __init__(self, n_var: int, n_obj: int, xl=0.0, xu=1.0, name: str = ""):
         self.n_var = n_var
@@ -67,178 +54,167 @@ class Problem:
     def evaluate(self, X: np.ndarray) -> np.ndarray:
         raise NotImplementedError
 
+    def pareto_front(self, n_points: int = 5000) -> np.ndarray:
+        raise NotImplementedError
+
     def __repr__(self):
         return f"Problem({self.name}, n_var={self.n_var}, n_obj={self.n_obj})"
 
 
 class PymooWrapper(Problem):
-    """Wraps a pymoo Problem so it exposes the .evaluate(X) -> F interface."""
+    """Wraps a pymoo Problem behind the ``evaluate(X) -> F`` interface."""
 
     def __init__(self, pymoo_problem, name: str):
         super().__init__(pymoo_problem.n_var, pymoo_problem.n_obj,
-                          pymoo_problem.xl, pymoo_problem.xu, name)
+                         pymoo_problem.xl, pymoo_problem.xu, name)
         self._p = pymoo_problem
 
     def evaluate(self, X: np.ndarray) -> np.ndarray:
-        out = {}
-        self._p._evaluate(X, out)
+        out: dict = {}
+        self._p._evaluate(np.atleast_2d(X), out)
         return np.atleast_2d(out["F"])
+
+    def pareto_front(self, n_points: int = 5000) -> np.ndarray:
+        rd = _lattice(self.n_obj, n_points)
+        try:
+            return np.atleast_2d(self._p.pareto_front(rd))
+        except TypeError:                       # DTLZ7 & co. take no ref_dirs
+            return np.atleast_2d(self._p.pareto_front())
 
 
 class MinusWrapper(Problem):
-    """Negates the objectives of a base problem -> inverted ('minus') front."""
+    """Negates the objectives of a base problem -> inverted ("minus") front.
+
+    THE PARETO FRONT OF A MINUS-DTLZ PROBLEM IS **NOT** THE NEGATED PARETO
+    FRONT OF THE BASE PROBLEM.  This was a bug in the previous version and it
+    silently corrupted every IGD+ value ever reported on Minus-DTLZ1/2.
+
+    For the multiplicative DTLZ family, f(x) = (1 + g(x_dist)) * h(x_pos), so
+    minimising -f means maximising f, which requires g to be at its MAXIMUM,
+    not at 0.  Hence
+
+        PF(Minus-DTLZ) = -(1 + g_max) * PF(DTLZ) ,
+
+    and the scale factor is very far from 1:
+
+        Minus-DTLZ2 (n=12, k=10): 1 + g_max = 3.5
+        Minus-DTLZ1 (n= 7, k= 5): 1 + g_max = 1102.30
+
+    So the old reference set was wrong by a factor of 3.5 on Minus-DTLZ2 and
+    by three orders of magnitude on Minus-DTLZ1; the approximation sets
+    dominated it entirely, which is exactly why IGD+ came out as 0.
+
+    The factor is recovered numerically (g is separable and symmetric in the
+    distance variables, so a 1-D scan of their common value is exact), and
+    the construction is verified in ``tests_reference_sets.py``: points built
+    at g_max are never dominated by 2x10^4 random samples.
+    """
 
     def __init__(self, base: Problem, name: str):
         super().__init__(base.n_var, base.n_obj, base.xl, base.xu, name)
         self._base = base
+        self._scale = None
 
     def evaluate(self, X: np.ndarray) -> np.ndarray:
         return -self._base.evaluate(X)
 
+    @property
+    def scale(self) -> float:
+        """(1 + g_max) / (1 + g_min), found by a 1-D scan of the distance vars."""
+        if self._scale is None:
+            m, n = self.n_obj, self.n_var
+            v = np.linspace(0.0, 1.0, 20001)
+            X = np.zeros((v.size, n))
+            X[:, m - 1:] = v[:, None]          # DTLZ: x_pos then x_dist
+            best = self._base.evaluate(X).max(axis=1)
+            lo = max(float(best.min()), 1e-12)
+            self._scale = float(best.max() / lo)
+        return self._scale
 
-# --------------------------------------------------------------------------
-# IMOP-style irregular problems (see module docstring for caveats)
-# --------------------------------------------------------------------------
-class IMOP3Like(Problem):
-    """3-objective spherical front with non-linear density bias (a << 1).
-
-    Decision vector x = (x_I, x_II) with |x_I| = m-1 position vars and
-    |x_II| = l distance vars (l=5, m=3 -> n=7, matching Cuadro 1).
-    """
-
-    def __init__(self, m: int = 3, l: int = 5, a: float = 0.05):
-        n = (m - 1) + l
-        super().__init__(n, m, 0.0, 1.0, name=f"IMOP3Like(m={m})")
-        self.m = m
-        self.l = l
-        self.a = a
-
-    def evaluate(self, X: np.ndarray) -> np.ndarray:
-        X = np.atleast_2d(X)
-        m, l, a = self.m, self.l, self.a
-        xI = X[:, : m - 1]
-        xII = X[:, m - 1:]
-        g = np.sum((xII - 0.5) ** 2, axis=1)  # convergence term, 0 on the PF
-        # density-bias warp (the mechanism used by the real IMOP suite)
-        y = np.clip(xI, 1e-12, 1.0) ** a
-        F = np.zeros((X.shape[0], m))
-        cum = np.ones(X.shape[0])
-        for i in range(m - 1):
-            F[:, i] = (1 + g) * cum * np.cos(y[:, i] * np.pi / 2)
-            cum = cum * np.sin(y[:, i] * np.pi / 2)
-        F[:, m - 1] = (1 + g) * cum
-        return F
+    def pareto_front(self, n_points: int = 5000) -> np.ndarray:
+        return -self.scale * self._base.pareto_front(n_points)
 
 
-class IMOP8Like(Problem):
-    """3-objective front split into 3 segments with distinct local geometry
-    (linear / concave / convex), selected by the first position variable.
-    """
+def _lattice(m: int, n_points: int) -> np.ndarray:
+    """Das-Dennis simplex lattice with roughly ``n_points`` directions."""
+    n_part = 1
+    while _dd_size(m, n_part + 1) <= n_points:
+        n_part += 1
+    return get_reference_directions("das-dennis", m, n_partitions=max(n_part, 1))
 
-    def __init__(self, m: int = 3, l: int = 5):
-        n = (m - 1) + l
-        super().__init__(n, m, 0.0, 1.0, name=f"IMOP8Like(m={m})")
-        self.m = m
-        self.l = l
 
-    def evaluate(self, X: np.ndarray) -> np.ndarray:
-        X = np.atleast_2d(X)
-        m, l = self.m, self.l
-        xI = X[:, : m - 1]
-        xII = X[:, m - 1:]
-        g = np.sum((xII - 0.5) ** 2, axis=1)
-        x1, x2 = xI[:, 0], xI[:, 1] if m > 2 else (xI[:, 0], xI[:, 0])
-        N = X.shape[0]
-        F = np.zeros((N, m))
-
-        seg = np.clip((x1 * 3).astype(int), 0, 2)  # 0,1,2 -> 3 segments
-
-        # Segment 0: LINEAR (simplex) front, offset down
-        mask = seg == 0
-        if np.any(mask):
-            w0 = x2[mask]
-            F[mask, 0] = (1 + g[mask]) * w0
-            F[mask, 1] = (1 + g[mask]) * (1 - w0) * 0.5
-            F[mask, 2] = (1 + g[mask]) * (1 - w0) * 0.5
-            F[mask] += 0.0  # base offset
-
-        # Segment 1: CONCAVE (spherical, DTLZ2-style), shifted
-        mask = seg == 1
-        if np.any(mask):
-            w1 = x2[mask] * np.pi / 2
-            r = 1 + g[mask]
-            F[mask, 0] = r * np.cos(w1) + 0.4
-            F[mask, 1] = r * np.sin(w1) + 0.4
-            F[mask, 2] = r * 0.3 + 0.4
-
-        # Segment 2: CONVEX front (inverted sphere), shifted further
-        mask = seg == 2
-        if np.any(mask):
-            w2 = x2[mask] * np.pi / 2
-            r = 1 + g[mask]
-            f0 = r * np.cos(w2)
-            f1 = r * np.sin(w2)
-            norm = np.sqrt(f0 ** 2 + f1 ** 2) + 1e-9
-            F[mask, 0] = (f0 / norm) + 0.8
-            F[mask, 1] = (f1 / norm) + 0.8
-            F[mask, 2] = r * 0.2 + 0.8
-
-        return F
+def _dd_size(m: int, h: int) -> int:
+    from math import comb
+    return comb(h + m - 1, m - 1)
 
 
 # --------------------------------------------------------------------------
-# Table 1 (Cuadro 1) registry
+# Registry
 # --------------------------------------------------------------------------
-_TABLE1_NVAR = {
-    "dtlz1": 7,
-    "dtlz2": 12,
-    "dtlz7": 22,   # <-- Add DTLZ7 (pymoo defaults to 22 variables for 3 objectives)
-    "minus-dtlz1": 7,
-    "minus-dtlz2": 12,
-    "wfg4": 14,
-    "wfg9": 14,
-    "imop3": 7,
-    "imop8": 7,
+_DTLZ_WFG_NVAR = {
+    "dtlz1": 7, "dtlz2": 12, "dtlz7": 22,
+    "minus-dtlz1": 7, "minus-dtlz2": 12,
+    "wfg4": 14, "wfg9": 14,
 }
+
+#: the 8 problems of Cuadro 1 (with IMOP3/IMOP8 now being the REAL ones)
+TABLE1_NAMES = ["dtlz1", "dtlz2", "minus-dtlz1", "minus-dtlz2",
+                "wfg4", "wfg9", "imop3", "imop8"]
+
+#: the complete IMOP suite requested in the review
+IMOP_SUITE = [f"imop{i}" for i in range(1, 9)]
+
+PROBLEM_NAMES = list(_DTLZ_WFG_NVAR) + IMOP_SUITE
+
+
+def problem_n_obj(name: str, m: int = 3) -> int:
+    """Number of objectives actually used for ``name``.
+
+    IMOP is NOT parameterised in m: IMOP1-3 are bi-objective and IMOP4-8 are
+    tri-objective in the original definition, so the requested ``m`` is
+    ignored (with a clear error if it conflicts) rather than silently
+    fabricating a variant that does not exist in the literature.
+    """
+    key = name.lower()
+    if key in IMOP_SUITE:
+        from .imop import IMOP_M
+        return IMOP_M[key]
+    return m
 
 
 def get_problem(name: str, m: int = 3, n_var: int | None = None) -> Problem:
-    """Factory matching Cuadro 1 of the proposal.
-
-    Parameters
-    ----------
-    name : one of dtlz1, dtlz2, minus-dtlz1, minus-dtlz2, wfg4, wfg9, imop3, imop8
-    m    : number of objectives (default 3, as in the proposal)
-    n_var: override the number of decision variables (defaults to Cuadro 1)
-    """
+    """Factory. ``m`` is ignored for the IMOP suite (see ``problem_n_obj``)."""
     key = name.lower()
+
+    if key in IMOP_SUITE:
+        from .imop import get_imop
+        return get_imop(key, n_var=n_var if n_var is not None else 10)
+
+    if key not in _DTLZ_WFG_NVAR:
+        raise ValueError(f"Unknown problem '{name}'. Options: {PROBLEM_NAMES}")
     if n_var is None:
-        n_var = _TABLE1_NVAR[key]
+        n_var = _DTLZ_WFG_NVAR[key]
 
-    if key == "dtlz1":
-        return PymooWrapper(_pymoo_get_problem("dtlz1", n_var=n_var, n_obj=m), "DTLZ1")
-    if key == "dtlz2":
-        return PymooWrapper(_pymoo_get_problem("dtlz2", n_var=n_var, n_obj=m), "DTLZ2")
-    if key == "dtlz7":  # <-- Add this block
-        return PymooWrapper(_pymoo_get_problem("dtlz7", n_var=n_var, n_obj=m), "DTLZ7")
-    if key == "minus-dtlz1":
-        base = PymooWrapper(_pymoo_get_problem("dtlz1", n_var=n_var, n_obj=m), "DTLZ1")
-        return MinusWrapper(base, "Minus-DTLZ1")
-    if key == "minus-dtlz2":
-        base = PymooWrapper(_pymoo_get_problem("dtlz2", n_var=n_var, n_obj=m), "DTLZ2")
-        return MinusWrapper(base, "Minus-DTLZ2")
-    if key == "wfg4":
-        return PymooWrapper(_pymoo_get_problem("wfg4", n_var=n_var, n_obj=m), "WFG4")
-    if key == "wfg9":
-        return PymooWrapper(_pymoo_get_problem("wfg9", n_var=n_var, n_obj=m), "WFG9")
-    if key == "imop3":
-        l = n_var - (m - 1)
-        return IMOP3Like(m=m, l=l)
-    if key == "imop8":
-        l = n_var - (m - 1)
-        return IMOP8Like(m=m, l=l)
+    if key.startswith("minus-"):
+        base_key = key[len("minus-"):]
+        base = PymooWrapper(_pymoo_get_problem(base_key, n_var=n_var, n_obj=m),
+                            base_key.upper())
+        return MinusWrapper(base, f"Minus-{base_key.upper()}")
 
-    raise ValueError(f"Unknown problem '{name}'. Options: {list(_TABLE1_NVAR)}")
+    return PymooWrapper(_pymoo_get_problem(key, n_var=n_var, n_obj=m), key.upper())
 
 
-PROBLEM_NAMES = list(_TABLE1_NVAR.keys())
+# --------------------------------------------------------------------------
+# Reference sets for IGD+
+# --------------------------------------------------------------------------
+def reference_set(name: str, m: int = 3, n_points: int = 5000) -> np.ndarray:
+    """Analytical sample Z of PF(P). See the module docstring."""
+    return get_problem(name, m=m).pareto_front(n_points)
+
+
+def make_reference_frame(name: str, m: int = 3, n_points: int = 5000,
+                         kappa: float = 0.1):
+    """Build the shared ``performance.ReferenceFrame`` for a problem."""
+    from .performance import ReferenceFrame
+    Z = reference_set(name, m=m, n_points=n_points)
+    return ReferenceFrame(Z, kappa=kappa, name=name)

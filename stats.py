@@ -15,9 +15,11 @@ from __future__ import annotations
 import itertools
 import numpy as np
 from scipy import stats as sstats
+from .performance import rank_biserial
 
 
-def wilcoxon_bonferroni(scores: np.ndarray, method_names: list[str]):
+def wilcoxon_bonferroni(scores: np.ndarray, method_names: list[str],
+                        alpha: float = 0.05):
     """Pairwise Wilcoxon signed-rank tests with Bonferroni correction.
 
     Returns a dict {(name_i, name_j): {"stat":..., "p_raw":..., "p_adj":...}}.
@@ -37,8 +39,13 @@ def wilcoxon_bonferroni(scores: np.ndarray, method_names: list[str]):
             except ValueError:
                 stat, p = np.nan, 1.0
         p_adj = min(p * n_comparisons, 1.0)
+        eff = rank_biserial(a, b)
+        med = float(np.median(a - b))
         results[(method_names[i], method_names[j])] = dict(
-            stat=stat, p_raw=p, p_adj=p_adj, significant=p_adj < 0.05)
+            stat=stat, p_raw=p, p_adj=p_adj, significant=p_adj < alpha,
+            # Definition D9: significance ALONE is not a claim of superiority.
+            effect_size=eff, median_diff=med,
+            winner=(method_names[i] if med > 0 else method_names[j]) if p_adj < alpha else None)
     return results
 
 
