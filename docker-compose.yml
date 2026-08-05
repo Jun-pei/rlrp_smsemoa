@@ -1,76 +1,57 @@
-version: '3.8'
-
 services:
-  rlrp_demo:
+  # Short end-to-end check that the image works (~2 min).
+  smoke:
     build: .
-    container_name: rlrp_demo
     volumes:
       - ./results:/app/results
-    # Keeps the console attached and formats the terminal output correctly
-    stdin_open: true
-    tty: true
-    command: ["python", "rlrp_smsemoa/run_demo.py", "--outdir", "/app/results/demo"]
+    command: >
+      python rlrp_smsemoa/run_full_experiment.py
+      --problems dtlz2 imop3
+      --n_seeds 3
+      --t_max 1000
+      --mu 30
+      --outdir /app/results/smoke
 
-  rlrp_full:
+  # Full protocol of Sec. 5.3: 14 problems (DTLZ/WFG + all eight IMOP)
+  # x 4 methods x 30 seeds.  Leaves 2 cores free.
+  full:
     build: .
-    container_name: rlrp_full
     volumes:
       - ./results:/app/results
-    # Keeps the console attached and formats the terminal output correctly
     stdin_open: true
     tty: true
-    # Dynamically calculates (Total Cores - 2) and passes it to the script
     command: >
       bash -c '
       CORES=$$(python -c "import os; print(max(1, os.cpu_count() - 2))");
-      echo "Starting experiment... Allocating $$CORES processes to leave 2 cores free.";
-      python rlrp_smsemoa/run_full_experiment.py \
-        --problems all \
-        --n_seeds 30 \
-        --t_max 100000 \
-        --mu 100 \
-        --processes $$CORES \
-        --outdir /app/results/full
+      echo "Allocating $$CORES processes.";
+      python rlrp_smsemoa/run_full_experiment.py
+      --problems all
+      --n_seeds 30
+      --t_max 100000
+      --mu 100
+      --processes $$CORES
+      --outdir /app/results/full
       '
 
-  test_dtlz1:
+  # The irregular geometries on their own (IMOP1..IMOP8), reported separately
+  # from the regular ones as Sec. 6.1 requires.
+  imop:
     build: .
-    container_name: test_dtlz1
     volumes:
       - ./results:/app/results
     command: >
+      bash -c '
+      CORES=$$(python -c "import os; print(max(1, os.cpu_count() - 2))");
       python rlrp_smsemoa/run_full_experiment.py
-      --problems dtlz1
+      --problems imop
       --n_seeds 30
       --t_max 100000
       --mu 100
-      --processes 10
-      --outdir /app/results/dtlz1
+      --processes $$CORES
+      --outdir /app/results/imop
+      '
 
-  test_dtlz2:
+  # Validation of every IGD+ reference set.
+  check_reference_sets:
     build: .
-    container_name: test_dtlz2
-    volumes:
-      - ./results:/app/results
-    command: >
-      python rlrp_smsemoa/run_full_experiment.py
-      --problems dtlz2
-      --n_seeds 30
-      --t_max 100000
-      --mu 100
-      --processes 10
-      --outdir /app/results/dtlz2
-
-  test_dtlz7:
-    build: .
-    container_name: test_dtlz7
-    volumes:
-      - ./results:/app/results
-    command: >
-      python rlrp_smsemoa/run_full_experiment.py
-      --problems dtlz7
-      --n_seeds 30
-      --t_max 100000
-      --mu 100
-      --processes 10
-      --outdir /app/results/dtlz7
+    command: python -m rlrp_smsemoa.tests_reference_sets

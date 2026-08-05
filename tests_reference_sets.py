@@ -2,7 +2,8 @@
 tests_reference_sets.py
 =======================
 Validation of every reference set Z used for IGD+ (Definition D2 / Section 2
-of performance.py).  Run with::
+of performance.py), over the whole benchmark: the six DTLZ/WFG problems and
+all eight IMOP problems.  Run with::
 
     python3 -m rlrp_smsemoa.tests_reference_sets
 
@@ -101,8 +102,6 @@ def main():
     print(f"{'problem':14s} {'m':>2s} {'|Z|':>6s} {'Z dominados':>12s} "
           f"{'d_rel medio':>12s} {'d_rel p95':>10s}")
     for name in PROBLEM_NAMES:
-        if name == "dtlz7":
-            continue
         r = check(name)
         flag = "  <-- REVISAR" if (r["dominated_ref_points"] > 0.01 * r["n_ref"]
                                    or r["rel_dist_p95"] > 0.10) else ""

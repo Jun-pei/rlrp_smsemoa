@@ -1,32 +1,28 @@
 """RL-RP-SMS-EMOA: RL-based online reference-point specification for HV-based MOEAs."""
-from .problems import (
-    get_problem, reference_set, make_reference_frame, problem_n_obj,
-    PROBLEM_NAMES, TABLE1_NAMES, IMOP_SUITE, Problem,
-)
-from .imop import get_imop, IMOP_NAMES, IMOP_M
 from .algorithm import (
-    RLRPSMSEMOA, History, METHODS, LEGACY_METHODS, DEFAULTS,
-    run_rl_rp_sms_emoa, run_sms_emoa_nadir, run_sms_emoa_balanced, run_sms_emoa_dynlin,
+    METHODS, RLRPSMSEMOA, run_d_sms_emoa, run_rl_rp_sms_emoa,
+    run_sms_emoa_balanced,
 )
+from .core import DEFAULTS, History
+from .experiment import add_time_to_target, get_frame, run_comparison, run_single
+from .history_io import iter_histories, load_history, save_history, stack_curves
+from .imop import IMOP_M, IMOP_NAMES, get_imop
 from .indicators import (
-    hypervolume, hv_contributions, igd_plus, riesz_energy, riesz_energy_log,
-    mean_dispersion, normalised_dispersion, extent, estimate_curvature_p,
-    geometry_gamma, estimate_ideal_nadir, normalize, nondominated,
+    estimate_curvature_p, estimate_ideal_nadir, extent, geometry_gamma,
+    hv_contributions, hypervolume, igd_plus, mean_dispersion, nondominated,
+    normalize, normalised_dispersion, riesz_energy, riesz_energy_log,
 )
-from .state import StateEncoder, invertedness
-from .rl_planner import ReplicatorQPlanner, regime_deltas, REGIME_NAMES, ZREF_MAX
 from .performance import (
-    ReferenceFrame, anytime_score, time_to_target, rank_biserial,
-    KAPPA_EXT, TARGET_Q,
+    KAPPA_EXT, TARGET_Q, ReferenceFrame, anytime_score, rank_biserial,
+    time_to_target,
 )
-from .r2_emoa import (
-    run_r2_emoa, run_sms_emoa_nadir_adaptive, r2_indicator, r2_contributions,
-    r2_weights,
+from .problems import (
+    BENCHMARK, DTLZ_WFG_NAMES, IMOP_SUITE, PROBLEM_NAMES, Problem, get_problem,
+    make_reference_frame, problem_n_obj, reference_set,
 )
-from .stats import wilcoxon_bonferroni, friedman_test, quade_test
-from .experiment import (
-    run_comparison, run_single, pivot_indicator, get_frame, add_time_to_target,
-)
-from .history_io import save_history, load_history, iter_histories, stack_curves
+from .r2_emoa import r2_contributions, r2_indicator, r2_weights, run_r2_emoa
+from .rl_planner import REGIME_NAMES, ZREF_MAX, ReplicatorQPlanner, regime_deltas
+from .state import StateEncoder, invertedness
+from .stats import friedman_test, quade_test, wilcoxon_bonferroni
 
 __all__ = [n for n in dir() if not n.startswith("_")]

@@ -75,36 +75,39 @@ compared):
   * DTLZ1, DTLZ2, WFG4, WFG9 : pymoo's closed-form ``pareto_front(ref_dirs)``
     evaluated on a Das-Dennis simplex lattice with H_Z divisions (default
     H_Z = 99 for m = 3, |Z| = 5050).
-  * Minus-DTLZ1, Minus-DTLZ2 : negation of the above, i.e. Z_minus = -Z.
+  * Minus-DTLZ1, Minus-DTLZ2 : the SCALED negation -(1 + g_max) * Z of the
+    corresponding DTLZ set.  Not simply -Z: since f = (1 + g)*h(x_pos),
+    minimising -f requires g at its MAXIMUM, not at 0.  The factor is 3.5 for
+    Minus-DTLZ2 and 1102.30 for Minus-DTLZ1 (see problems.MinusWrapper).
   * IMOP1..IMOP8 : the analytical ``GetOptimum`` sampler of the original
     PlatEMO implementation, ported in ``imop.py`` and verified against a dense
     non-dominated sample of the g = 0 manifold (max deviation < 2e-2, and
     < 6e-3 for all but IMOP8).
 
-  The previous version drew Z from a Dirichlet/spherical guess for DTLZ and
-  from *random decision-space sampling followed by a non-dominated filter* for
-  WFG and IMOP.  That fallback is not a sample of PF(P): random sampling of a
-  14-variable WFG problem essentially never reaches g = 0, so IGD+ was being
-  measured against a set lying far above the true front.  It is fixed here.
+Z is never drawn by random decision-space sampling followed by a non-dominated
+filter: that is not a sample of PF(P) -- random sampling of a 14-variable WFG
+problem essentially never reaches g = 0 -- and IGD+ measured against such a set
+is not IGD+.  ``tests_reference_sets.py`` checks every Z that is used.
 
 |Z| must be reported with the results: IGD+ is a sample statistic of Z, so
-values obtained with different |Z| are NOT comparable.
+values obtained with different |Z| are NOT comparable.  It is stored in each
+run's ``.meta.json`` as ``n_ref``.
 
 ------------------------------------------------------------------------------
 3. Anytime performance
 ------------------------------------------------------------------------------
-Since all per-generation values are now stored, performance is defined not
-only at the final generation but over the whole trajectory.  For an indicator
-I in {HVR, IGD+, Eratio} recorded at generations t = 1..T:
+Since all per-generation values are stored, performance is defined not only at
+the final generation but over the whole trajectory.  For an indicator I in
+{HVR, IGD+, Eratio} recorded at generations t = 1..T:
 
 (D4) ANYTIME SCORE  (for the higher-is-better HVR):
 
          AT(A) = (1/T) * sum_{t=1}^{T} HVR( A(t) )      in [0,1]
 
      i.e. the normalised area under the HVR-vs-generation curve.  This is the
-     quantity a reference-point *schedule* is actually supposed to improve:
-     the fixed-nadir baseline and RL-RP can perfectly well end at the same
-     final HVR while differing substantially in how fast they got there.
+     quantity a reference-point *schedule* is actually supposed to improve: a
+     fixed-reference-point baseline and RL-RP can perfectly well end at the
+     same final HVR while differing substantially in how fast they got there.
 
 (D5) TIME TO TARGET:
 

@@ -4,22 +4,21 @@ indicators.py
 Indicators used by the algorithm (state features, SMS-EMOA selection) and by
 the performance assessment (Sec. 5).
 
-Changes w.r.t. the first version, all motivated by the review comments:
+Points worth knowing:
 
-* ``hypervolume`` now actually *discards* points that do not dominate z_ref
-  (the old code computed the mask and then ignored it) and can fall back to a
-  Monte-Carlo estimator, so the code no longer depends on exact HV being
-  affordable -- this is what makes m > 3 feasible (see ``backend``).
+* ``hypervolume`` discards points that do not dominate z_ref and can fall back
+  to a Monte-Carlo estimator, so nothing here depends on exact HV being
+  affordable -- that is what keeps m > 3 feasible (see ``backend``).
 * ``estimate_ideal_nadir`` estimates the nadir from the **non-dominated
-  front**, not from the whole population.  Using the max over the whole
-  population makes the normalisation depend on the worst dominated
-  individuals, so [0,1]^m was not really the normalised objective space.
-* ``riesz_energy`` is reported **per ordered pair**, so the value no longer
-  changes just because |A| changed; this is what makes the E-ratio state
-  feature comparable across generations.
-* NEW ``estimate_curvature_p`` / ``geometry_gamma``: an explicit, measurable
+  front**, not from the whole population: taking the max over the population
+  lets the worst dominated individuals dictate the scale, in which case
+  [0,1]^m is not really the normalised objective space.
+* ``riesz_energy`` is reported **per ordered pair**.  The raw sum scales like
+  n^2, so a change in |A| alone would move the E-ratio state feature even when
+  the geometry of the distribution is unchanged.
+* ``estimate_curvature_p`` / ``geometry_gamma`` give an explicit, bounded
   descriptor of the *geometry* of the current front (convex / linear /
-  concave), replacing the implicit contour-vs-interior heuristic.
+  concave); see state.py.
 """
 
 from __future__ import annotations

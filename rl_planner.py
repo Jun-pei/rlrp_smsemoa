@@ -20,14 +20,16 @@ of the front's own extent, delta = 1/H = 1/12 ~ 0.083 is the classical
 Ishibuchi et al. setting (one spacing of a simplex lattice with H divisions),
 and delta = 1.0 is one full nadir-to-ideal range per step.
 
-THE REFERENCE POINT IS NOW BOX-BOUNDED (review comment)
--------------------------------------------------------
-Previously the update was ``z_i <- max(1, z_i + s*delta)``: bounded below, but
-**unbounded above**.  With the coarse regime (delta = 1) a run could push z_ref
+THE REFERENCE POINT IS BOX-BOUNDED
+----------------------------------
+The update of Sec. 2.2, ``z_i <- max(1, z_i + s*delta)``, is bounded below but
+**unbounded above**.  With the coarse regime (delta = 1) a run can push z_ref
 to 10^3 or beyond, at which point the HV landscape is essentially flat, every
 solution's contribution is dominated by the box term, and SMS-EMOA degenerates
 into a boundary-seeking method that spreads the population onto the extremes.
-The update is now projected onto a box
+Measured without the bound, z_ref ended runs at (7.0, 9.0, 9.0) and
+(3.9, 1.1, 4.6) -- a random walk with +-1 steps, pinned against nothing.  The
+update is therefore projected onto a box
 
     Z = [z_min, z_max]^m,   z_min = 1 + eps_z (default 1.001),
                             z_max = ZREF_MAX  (default 10)

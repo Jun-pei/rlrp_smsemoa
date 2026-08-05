@@ -4,74 +4,77 @@ state.py
 State s_t = (D_norm, HV_norm, t/T_max, gamma, E_norm) in [0,1]^5, discretised
 into a finite index for tabular Q-learning.
 
-WHAT CHANGED AND WHY
---------------------
-The three review comments that hit this module were: *how is the diversity
-value handled?*, *how is the geometry detected in the state?* and *is the
-objective space normalised?*.  All three had the same root cause -- two of the
-five features were normalised by a **running maximum over the run**:
+EVERY FEATURE IS BOUNDED BY AN ABSOLUTE CONSTANT
+------------------------------------------------
+None of the features is normalised by a running maximum over the run.  A
+running maximum is a statistic of the *trajectory*, not of the population, so
+the map (population -> state) would change as the run progressed -- the same
+front could be state 137 at t = 1000 and state 42 at t = 50000 -- making the
+decision process non-stationary, and tabular Q-learning is only guaranteed to
+converge on a stationary MDP.  Instead:
 
-    D_norm(t)  = D(t)  / max_{t' <= t} D(t')
-    HV_norm(t) = HV(t) / max_{t' <= t} HV(t')
+    D_norm(t)  = D(A_nd(t)) / (1/2)                       in [0,1]
+                 (1/2 is the exact upper bound of the mean per-objective
+                 standard deviation inside [0,1]^m; see indicators.py)
+    HV_norm(t) = HV(A_nd(t), z_ref(t)) / prod_i z_ref,i   in [0,1]
+                 (normalised by the volume of the box, not by the best HV
+                 seen so far)
+    gamma(t)   = p/(1+p) in (0,1) from the fitted curvature exponent of
+                 sum_i f_i^p = 1  (indicators.estimate_curvature_p)
+    E_norm(t)  = clip(E^ln_s(t)/E^ln_s(t-1), 0, 2)/2      in [0,1]
+                 (1/2 = no change; > 1/2 = uniformity got worse)
 
-A running maximum is a statistic of the trajectory, not of the population, so
-the map (population -> state) changed as the run progressed: the same front
-could be state 137 at t = 1000 and state 42 at t = 50000.  That makes the
-decision process **non-stationary**, and a tabular Q-learner is only
-guaranteed to converge on a stationary MDP.  Both features are now normalised
-by *absolute*, problem-independent bounds:
+Everything is computed on the objective space already mapped to [0,1]^m by the
+ideal/nadir estimated from the non-dominated front.
 
-    D_norm(t)  = D(A_nd(t)) / (1/2)        in [0,1]   (see indicators.py)
-    HV_norm(t) = HV(A_nd(t), z_ref(t)) / vol([0,1]^m -> z_ref(t))
-               = HV / prod_i z_ref,i       in [0,1]
-
-Both are now genuinely dimensionless and stationary, and both are computed on
-the objective space already mapped to [0,1]^m by the ideal/nadir estimated
-from the non-dominated front.
-
-The geometry feature ``gamma`` replaces the old ``g_hat``.  ``g_hat`` measured
-the ratio of HV contributions between the outer and inner half of the front,
-which is a proxy for *where the selection pressure is*, not for *what shape
-the front has* -- and it depends on z_ref, the very thing the planner is
-moving, so it confounded cause and effect.  ``gamma = p/(1+p)`` comes from the
-fitted curvature exponent of  sum_i f_i^p = 1  (indicators.estimate_curvature_p):
+GEOMETRY: gamma, NOT the contour/interior ratio
+-----------------------------------------------
+``gamma`` measures the *shape* of the front:
 
     gamma < 1/2 convex,  gamma = 1/2 linear,  gamma > 1/2 concave.
 
-Measured values on the analytical fronts of the benchmark (m = 3):
+Measured on the analytical fronts of the benchmark (value of p, |Z| ~ 2000):
 
-    DTLZ1 p=1.00   DTLZ2 p=2.00   WFG4 p=2.01   WFG9 p=2.00
-    Minus-DTLZ1 p=4.08   Minus-DTLZ2 p=2.58   DTLZ7 p=2.45
-    IMOP4 p=1.59   IMOP5 p=1.86   IMOP6 p=1.73   IMOP7 p=2.00   IMOP8 p=1.62
+    DTLZ1 1.00   DTLZ2 2.00   WFG4 2.01   WFG9 2.00
+    Minus-DTLZ1 3.88   Minus-DTLZ2 2.43
+    IMOP1 0.25   IMOP2 4.00   IMOP3 0.83   IMOP4 1.59
+    IMOP5 1.86   IMOP6 1.75   IMOP7 2.00   IMOP8 1.58
 
-``iota`` (invertedness) is computed and logged as a diagnostic but is not in
-the default state; see ``geometry_mode``.
+The alternative descriptor of Eq. (6) -- the ratio of HV contributions between
+the outer and the inner half of the front -- measures *where the selection
+pressure currently is*, not what shape the front has, and it depends on z_ref,
+the very thing the planner moves, so it confounds cause and effect.  It is
+kept available as ``geometry_mode="contour"`` (and ``"both"``) for the ablation
+promised in Sec. 6.1, but it is not the default.
+
+``iota`` (invertedness) is computed and logged as a diagnostic; adding it to
+the state would multiply |S| by n_bins_coarse, which the sample-complexity
+note below argues against.
 
 Default discretisation
 ----------------------
-    D_norm, HV_norm      -> 5 bins each
+    D_norm, HV_norm        -> 5 bins each
     t/T_max, gamma, E_norm -> 3 bins each
     |S| = 5*5*3*3*3 = 675
 
-SAMPLE-COMPLEXITY WARNING (read this before adding features)
-------------------------------------------------------------
-|S| x K x 2m = 675 x 3 x 6 = 12,150 Q-entries for m = 3, while only the
-balanced regime updates Q (Eq. 10) during rho*T_max generations.  At
-T_max = 100,000 and rho = 0.7 that is ~70,000 adaptation steps, of which
-roughly sigma_balanced fraction touch Q -- on the order of 1-2 updates per
-entry.  The table is therefore almost untrained, which is very likely why
-RL-RP is only *competitive with* rather than better than the fixed-nadir
-baseline.  ``StateEncoder`` exposes ``n_states`` and the runner reports the
-realised visit counts (``q_coverage``) so this is measurable rather than
-assumed.  Use ``n_bins_fine=3`` (-> |S| = 243) if coverage is too low.
+SAMPLE COMPLEXITY (read this before adding features)
+----------------------------------------------------
+|S| x K x 2m = 675 x 3 x 6 = 12,150 Q-entries for m = 3, filled during at most
+rho*T_max adaptation steps -- on the order of 1-2 updates per entry at
+T_max = 100,000.  The table is therefore nearly untrained, and measurements on
+DTLZ2 show only 19-43 distinct states are ever visited (effective count 5-8).
+``StateEncoder.n_states`` and the planner's ``q_coverage()`` report the
+realised numbers so this stays measurable rather than assumed; ``n_bins_fine=3``
+(-> |S| = 243) is the knob if coverage is too low.  See section 12 of
+RESPUESTAS.md: |S| turned out not to be the binding constraint.
 """
 
 from __future__ import annotations
 import numpy as np
 
 from .indicators import (
-    normalised_dispersion, riesz_energy_log, hypervolume, geometry_gamma,
-    estimate_curvature_p, compute_ghat, extent, nondominated,
+    compute_ghat, estimate_curvature_p, extent, hypervolume, nondominated,
+    normalised_dispersion, riesz_energy_log,
 )
 
 
@@ -147,10 +150,11 @@ class StateEncoder:
         ghat = compute_ghat(A, zref, **self.hv_kwargs) if self.geometry_mode in ("contour", "both") else float("nan")
 
         # --- E_norm: ratio of consecutive log-energies, mapped to [0,1] ------
-        # E_norm = 1/2 means "no change"; < 1/2 more uniform than last
-        # generation, > 1/2 less uniform.  The old code clipped the ratio at
-        # 1.0, which made *degradation of uniformity unobservable* -- the
-        # planner could never see that a move had made the distribution worse.
+        # E_norm = 1/2 means "no change"; < 1/2 more uniform than the previous
+        # generation, > 1/2 less uniform.  Eq. (5) as written clips the ratio
+        # at 1.0, which makes a DEGRADATION of uniformity unobservable -- the
+        # planner could never see that a move had made the distribution worse,
+        # so the two-sided mapping is used instead.
         eln = riesz_energy_log(A, s=self.riesz_s)
         if self.prev_eln is None or self.prev_eln <= 1e-12:
             e_norm, ratio = 0.5, 1.0

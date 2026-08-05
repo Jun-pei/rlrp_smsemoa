@@ -129,7 +129,11 @@ class _IMOPBase(Problem):
 # IMOP1--IMOP3 : m = 2
 # ---------------------------------------------------------------------------
 class IMOP1(_IMOPBase):
-    """Concave-ish 2-D front, f = (cos^8, sin^8), strong density bias."""
+    """CONVEX 2-D front, f = (cos^8, sin^8), strong density bias.
+
+    The eighth power pulls the front well inside the linear one (it passes
+    through f = (0.0625, 0.0625)); the fitted curvature exponent is p = 0.25.
+    """
     M_FIXED = 2
 
     def __init__(self, **kw):
@@ -151,7 +155,11 @@ class IMOP1(_IMOPBase):
 
 
 class IMOP2(_IMOPBase):
-    """Convex 2-D front, f = (cos^0.5, sin^0.5), strong density bias."""
+    """CONCAVE 2-D front, f = (cos^0.5, sin^0.5), strong density bias.
+
+    Mirror image of IMOP1: the square root pushes the front outside the linear
+    one, and the fitted curvature exponent is p = 4.0.
+    """
     M_FIXED = 2
 
     def __init__(self, **kw):

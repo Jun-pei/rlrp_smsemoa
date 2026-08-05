@@ -5,11 +5,14 @@ Problem registry and, crucially, the **reference sets Z** used for IGD+.
 
 Suites available
 ----------------
-    DTLZ1, DTLZ2, DTLZ7          (pymoo, m free)
+    DTLZ1, DTLZ2                 (pymoo, m free)
     Minus-DTLZ1, Minus-DTLZ2     (negation, Ishibuchi et al.)
     WFG4, WFG9                   (pymoo, m free)
     IMOP1 ... IMOP8              (faithful port of PlatEMO, see imop.py;
                                   m fixed by the benchmark: 2,2,2,3,3,3,3,3)
+
+``BENCHMARK`` is the set actually run: the six regular problems of Cuadro 1
+plus the COMPLETE IMOP suite (all eight problems, not only IMOP3 and IMOP8).
 
 Reference sets (review comment: *IGD+ - conjunto de referencia? cual usas?*)
 ---------------------------------------------------------------------------
@@ -78,7 +81,7 @@ class PymooWrapper(Problem):
         rd = _lattice(self.n_obj, n_points)
         try:
             return np.atleast_2d(self._p.pareto_front(rd))
-        except TypeError:                       # DTLZ7 & co. take no ref_dirs
+        except TypeError:                       # problems that take no ref_dirs
             return np.atleast_2d(self._p.pareto_front())
 
 
@@ -151,20 +154,25 @@ def _dd_size(m: int, h: int) -> int:
 # --------------------------------------------------------------------------
 # Registry
 # --------------------------------------------------------------------------
+#: n_var per Cuadro 1
 _DTLZ_WFG_NVAR = {
-    "dtlz1": 7, "dtlz2": 12, "dtlz7": 22,
+    "dtlz1": 7, "dtlz2": 12,
     "minus-dtlz1": 7, "minus-dtlz2": 12,
     "wfg4": 14, "wfg9": 14,
 }
 
-#: the 8 problems of Cuadro 1 (with IMOP3/IMOP8 now being the REAL ones)
-TABLE1_NAMES = ["dtlz1", "dtlz2", "minus-dtlz1", "minus-dtlz2",
-                "wfg4", "wfg9", "imop3", "imop8"]
+#: the regular geometries of Cuadro 1 (m = 3)
+DTLZ_WFG_NAMES = list(_DTLZ_WFG_NVAR)
 
-#: the complete IMOP suite requested in the review
+#: the COMPLETE IMOP suite -- all eight problems are run, not just IMOP3/IMOP8.
+#: IMOP1-3 are bi-objective and IMOP4-8 tri-objective by definition of the
+#: benchmark (see ``problem_n_obj``).
 IMOP_SUITE = [f"imop{i}" for i in range(1, 9)]
 
-PROBLEM_NAMES = list(_DTLZ_WFG_NVAR) + IMOP_SUITE
+#: everything the experiment protocol runs: 6 regular + 8 irregular = 14
+BENCHMARK = DTLZ_WFG_NAMES + IMOP_SUITE
+
+PROBLEM_NAMES = list(BENCHMARK)
 
 
 def problem_n_obj(name: str, m: int = 3) -> int:

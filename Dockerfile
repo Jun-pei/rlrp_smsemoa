@@ -1,32 +1,27 @@
-# Use the official Python 3.10 slim image as the base
-FROM python:3.10-slim
+# The repository root IS the `rlrp_smsemoa` package, so it is copied into
+# /app/rlrp_smsemoa and /app is placed on the import path.
+FROM python:3.11-slim
 
-# Set environment variables to prevent Python from writing pyc files to disc
-# and to prevent Python from buffering stdout and stderr
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 
-# Set the working directory
 WORKDIR /app
 
-# Install system dependencies if required (e.g., for building some C-extensions)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy only the requirements file first to leverage Docker cache
-COPY rlrp_smsemoa/requirements.txt /app/rlrp_smsemoa/
-
-# Install Python dependencies
+# requirements first, so the dependency layer survives code changes
+COPY requirements.txt /app/rlrp_smsemoa/requirements.txt
 RUN pip install --upgrade pip && \
-    pip install --no-cache-dir -r rlrp_smsemoa/requirements.txt
+    pip install --no-cache-dir -r /app/rlrp_smsemoa/requirements.txt
 
-# Copy the rest of the application code
-COPY rlrp_smsemoa /app/rlrp_smsemoa
+COPY . /app/rlrp_smsemoa/
 
-# Create a default directory for results
 RUN mkdir -p /app/results
 
-# Default command: run the demo
-CMD ["python", "rlrp_smsemoa/run_demo.py", "--outdir", "/app/results/demo"]
+# Short smoke run by default; docker-compose defines the real experiments.
+CMD ["python", "rlrp_smsemoa/run_full_experiment.py", \
+     "--problems", "dtlz2", "--n_seeds", "3", "--t_max", "1000", "--mu", "30", \
+     "--outdir", "/app/results/smoke"]

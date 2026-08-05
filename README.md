@@ -1,6 +1,14 @@
 # RL-RP-SMS-EMOA
 
-Python implementation of **"Un Método Basado en Aprendizaje por Refuerzo para la Especificación en Línea del Punto de Referencia en MOEAs Basados en Hipervolumen"** (CICESE, Dr. Jesús Guillermo Falcón Cardona).
+Python implementation of **"Un Método Basado en Aprendizaje por Refuerzo para la
+Especificación en Línea del Punto de Referencia en MOEAs Basados en Hipervolumen"**
+(CICESE, Dr. Jesús Guillermo Falcón Cardona).
+
+SMS-EMOA whose hypervolume reference point is moved online by a two-level
+planner: replicator dynamics chooses the *step size regime* (fine / balanced /
+coarse) and a tabular Q-learner chooses the *direction* (which objective, which
+sign). See `RESPUESTAS.md` for the answers to the seminar observations and for
+what the measurements actually show.
 
 ---
 
@@ -8,19 +16,22 @@ Python implementation of **"Un Método Basado en Aprendizaje por Refuerzo para l
 
 ```
 rlrp_smsemoa/
-├── problems.py            # 8 test problems (Cuadro 1): DTLZ1/2, Minus-DTLZ1/2,
-│                          #   WFG4, WFG9, IMOP3-like, IMOP8-like
-├── indicators.py          # HV, HVC, IGD+, Riesz E_s, dispersion D(t)
-├── state.py               # State encoder: 5-dim feature vector -> 675 discrete states
-├── rl_planner.py          # Replicator dynamics (Eq. 9) + Q-learning (Eq. 10)
-├── sms_emoa.py            # SBX + PM operators, steady-state SMS-EMOA elimination
-├── algorithm.py           # Algorithm 1 (RL-RP-SMS-EMOA) + 3 baseline methods
-├── experiment.py          # Single-run helper, multi-seed runner, true-front sampler
-├── stats.py               # Wilcoxon/Bonferroni, Friedman, Quade tests (Sec. 5.3)
-├── run_demo.py            # Quick demonstration (small mu/Tmax, 2 problems)
-├── run_full_experiment.py # Full protocol: 8 problems × 4 methods × 30 seeds
-├── run_sensitivity.py     # Sensitivity sweeps: W, mu, rho (Sec. 5.3 a-c)
-└── requirements.txt
+├── problems.py             # problem registry + analytical reference sets Z
+├── imop.py                 # IMOP1..IMOP8, ported from PlatEMO (CalObj + GetOptimum)
+├── indicators.py           # HV, HVC, IGD+, Riesz energy, dispersion, curvature
+├── sms_emoa.py             # SBX + PM operators, steady-state SMS-EMOA elimination
+├── state.py                # 5-feature state encoder -> 675 discrete states
+├── rl_planner.py           # replicator dynamics (Eq. 9) + Q-learning (Eq. 10)
+├── core.py                 # shared config, History, generation step, logging
+├── algorithm.py            # RL-RP-SMS-EMOA + the reference-point baselines
+├── r2_emoa.py              # R2-EMOA, the indicator-agnostic control
+├── performance.py          # Definitions D1-D9: what "performance" means
+├── history_io.py           # per-generation histories on disk
+├── experiment.py           # one run / one comparison
+├── stats.py                # Wilcoxon+Bonferroni, Friedman, Quade
+├── run_full_experiment.py  # the Sec. 5.3 protocol (CLI)
+├── run_sensitivity.py      # the Sec. 5.3 a-c sweeps (CLI)
+└── tests_reference_sets.py # validation of every Z used for IGD+
 ```
 
 ---
@@ -31,225 +42,233 @@ rlrp_smsemoa/
 pip install -r requirements.txt
 ```
 
-Tested with Python 3.10+, pymoo 0.6.1.6.
+Python 3.10+, pymoo 0.6.1.6. The repository root *is* the `rlrp_smsemoa`
+package, so its parent directory must be on the import path; the CLI scripts
+arrange that themselves.
 
 ---
 
 ## Quick start
 
 ```bash
-python3 run_demo.py --mu 30 --t_max 400 --n_seeds 5 --outdir results/demo
+# smoke run: 2 problems x 4 methods x 3 seeds, ~2 minutes
+python3 run_full_experiment.py --problems dtlz2 imop3 --n_seeds 3 \
+    --t_max 1000 --mu 30 --outdir results/smoke
 ```
 
-Runs 4 methods × 5 seeds on **DTLZ2** and **Minus-DTLZ1** (≈3 min on a laptop), produces:
+Or with Docker:
 
-- `convergence_{problem}.png` — HV (external far PR) convergence curves
-- `planner_{problem}.png`     — σ(t) regime probabilities + z_ref(t) trajectory
-- `fronts_{problem}.png`      — Final 3D non-dominated fronts, 4-panel
-- `results_{problem}.csv`     — Raw per-seed indicator values
+```bash
+docker compose run --rm smoke     # short check
+docker compose run --rm full      # the whole protocol
+docker compose run --rm imop      # the IMOP suite on its own
+```
 
 ---
 
-## Full experiment (Sec. 5.3, 30 seeds)
+## The benchmark
+
+Fourteen problems: the six regular geometries of Cuadro 1 plus the **complete**
+IMOP suite.
+
+| Problem | Front | m | n |
+|---|---|---|---|
+| DTLZ1 | linear triangular | 3 | 7 |
+| DTLZ2 | concave spherical | 3 | 12 |
+| Minus-DTLZ1 | inverted linear | 3 | 7 |
+| Minus-DTLZ2 | inverted spherical | 3 | 12 |
+| WFG4 | multimodal concave | 3 | 14 |
+| WFG9 | degenerate / irregular | 3 | 14 |
+| IMOP1 | biased density, convex | 2 | 10 |
+| IMOP2 | biased density, concave | 2 | 10 |
+| IMOP3 | disconnected | 2 | 10 |
+| IMOP4 | degenerate curve-like | 3 | 10 |
+| IMOP5 | eight disconnected patches | 3 | 10 |
+| IMOP6 | planar with holes | 3 | 10 |
+| IMOP7 | thin band | 3 | 10 |
+| IMOP8 | highly multimodal | 3 | 10 |
+
+**IMOP is not parameterised in `m`.** IMOP1–3 are bi-objective and IMOP4–8
+tri-objective by definition of the benchmark, so `problem_n_obj()` returns the
+correct `m` and `get_imop()` raises rather than fabricating a 3-objective
+"IMOP3" that does not exist in the literature. Cuadro 1 asked for one; it was
+previously supplied by an invented `IMOP3Like` surrogate, which is gone.
+
+---
+
+## The four compared configurations
+
+| Method | Reference point | Source |
+|---|---|---|
+| `SMS-EMOA_balanced` | fixed, `(1 + 1/H)·1` | Ishibuchi et al., GECCO 2017 |
+| `d-SMS-EMOA` | dynamic, `r` from 10 down to 1 | Ishibuchi et al., CEC 2018 |
+| `R2-EMOA` | none (R2 selection) | Trautmann, Wagner & Brockhoff, LION 2013 |
+| `RL-RP-SMS-EMOA` | learned online | proposed |
+
+All four share the same operators, the same steady-state elimination structure
+and the same instrumentation, so any difference between them is a difference in
+the reference-point / selection mechanism.
+
+**`d-SMS-EMOA`** (also written SMS-EMOA-DRP) replaces the `SMS-EMOA_nadir`
+baseline of the original proposal. A reference point pinned at `nadir + 0.01`
+is a straw man: it sits so close to the nadir that the extreme solutions
+contribute almost no hypervolume, and it is not what any of the cited papers
+propose. d-SMS-EMOA is the published dynamic scheme — `r = 10` at the initial
+population, falling to `r = 1` at the final one, so the search first spreads
+towards the boundary of the front and then concentrates on its centre.
+
+---
+
+## Full protocol (Sec. 5.3)
 
 ```bash
-# All 8 problems, 30 seeds, Tmax=100 000, mu=100, 8 parallel workers
 python3 run_full_experiment.py \
     --problems all \
     --n_seeds 30 \
     --t_max 100000 \
     --mu 100 \
-    --processes 8 \
+    --processes 32 \
     --outdir results/full
 ```
 
-> **Expected runtime**: each (problem, method, seed) run at mu=100, Tmax=100 000 takes
-> roughly 10-30 min in pure Python. The full 8×4×30=960 runs are feasible on a
-> compute node with `--processes 32` overnight. For faster iteration, lower
-> `--t_max` (e.g. 5000) to check correctness before committing to the full run.
+Outputs in `--outdir`:
 
-Outputs:
-- `results_{problem}.csv` — Raw per-seed indicators (one row per seed)
-- `all_results.csv`       — Concatenation of all problems
-- `summary.csv`           — Grouped mean ± std per (problem, method)
-- `stats.txt`             — Friedman, Quade, Wilcoxon/Bonferroni results
+| File | Contents |
+|---|---|
+| `history/<problem>/<method>/seed<NNN>.csv.gz` | **every generation of every run** |
+| `history/.../seed<NNN>.meta.json` | run metadata: \|S\|, \|Z\|, `t_adapt`, Q-table coverage |
+| `results_<problem>.csv` | one summary row per (method, seed) |
+| `all_results.csv` | all of them, plus time-to-target (D5) |
+| `summary.csv` | median + IQR per (problem, method) |
+| `stats.txt` | Friedman, Quade, Wilcoxon/Bonferroni with effect sizes |
+
+### Everything is stored, not just the final values
+
+One row per generation, unconditionally — about 40 columns: the full `z_ref`,
+the estimated ideal/nadir, HV against both the adaptive and a fixed reference
+point, dispersion, Riesz energy, fitted curvature, HVR / IGD+ / Eratio, the
+chosen regime and sub-action, the state index, the reward, ε, σ, the payoffs
+and the state features. That is roughly 3–4 MB per 100 000-generation run.
+
+This is not bookkeeping for its own sake: the finding in section 12 of
+`RESPUESTAS.md` — that the per-generation reward carries no signal about the
+eventual improvement (Spearman ρ = +0.008) — is invisible in final-value tables
+and only shows up in the traces.
+
+`--eval_every` thins **only** the external indicators (HVR / IGD+ / Eratio
+against the reference set Z), which are the expensive part. It defaults to 1,
+i.e. nothing is thinned; raise it if a large-`mu` sweep makes it the bottleneck.
 
 ---
 
 ## Sensitivity analysis (Sec. 5.3 a–c)
 
 ```bash
-# (a) W in {10, 20, 30, 50}
-python3 run_sensitivity.py --sweep W --problems all --n_seeds 30 \
-    --t_max 100000 --mu 100
-
-# (b) mu in {91, 100, 153, 210}  (Das-Dennis H in {12, 16, 20} for m=3)
-python3 run_sensitivity.py --sweep mu --problems all --n_seeds 30 \
-    --t_max 100000
-
-# (c) rho in {0.5, 0.7, 0.9}
-python3 run_sensitivity.py --sweep rho --problems all --n_seeds 30 \
-    --t_max 100000 --mu 100
-
-# Or all at once:
-python3 run_sensitivity.py --sweep all --problems all --n_seeds 30 \
-    --t_max 100000 --mu 100 --outdir results/sensitivity
+python3 run_sensitivity.py --problem dtlz2 --param W   --values 10 20 30 50
+python3 run_sensitivity.py --problem dtlz2 --param mu  --values 91 100 153 210
+python3 run_sensitivity.py --problem dtlz2 --param rho --values 0.5 0.7 0.9
 ```
 
 ---
 
-## Using the API programmatically
+## Validating the reference sets
 
-```python
-from problems import get_problem
-from algorithm import run_rl_rp_sms_emoa, run_sms_emoa_balanced
-
-problem = get_problem("dtlz2", m=3)
-
-# Run RL-RP-SMS-EMOA with default hyperparameters
-X, F, hist = run_rl_rp_sms_emoa(problem, t_max=10_000, seed=0, mu=100)
-
-print(f"Final pop: {F.shape}")
-print(f"HV (far PR, final 5 gens): {hist.hv_ext_far[-5:]}")
-print(f"Final sigma: {hist.sigma[-1]}")  # regime distribution at end of adaptation
-
-# Compare to balanced baseline
-X_b, F_b, hist_b = run_sms_emoa_balanced(problem, t_max=10_000, seed=0, mu=100)
+```bash
+python3 -m rlrp_smsemoa.tests_reference_sets
 ```
 
-### Hyperparameter API
+Checks, for all fourteen problems, that no point of `Z` is dominated by a large
+random sample (soundness) and that a dense sample of the true optimal manifold
+lies close to `Z` (tightness). IGD+ against a wrong `Z` is not IGD+, so this is
+run before trusting any IGD+ number.
+
+---
+
+## Programmatic use
 
 ```python
+from rlrp_smsemoa import get_problem, get_frame, run_single, METHODS
+
+# one run, full history written to disk
+row = run_single("imop8", "RL-RP-SMS-EMOA", seed=0, t_max=10_000,
+                 histdir="results/history", mu=100)
+print(row["hvr_final"], row["igd_plus_final"], row["history_path"])
+
+# or drive an algorithm directly
+problem = get_problem("minus-dtlz2", m=3)
+frame = get_frame("minus-dtlz2", m=3)
+X, F, hist = METHODS["d-SMS-EMOA"](problem, t_max=5_000, seed=0, frame=frame)
+df = hist.to_dataframe()          # one row per generation
+```
+
+### Planner hyper-parameters
+
+```python
+from rlrp_smsemoa import run_rl_rp_sms_emoa
+
 X, F, hist = run_rl_rp_sms_emoa(
     problem, t_max=10_000, seed=0,
-    mu=100,          # population size
-    H=12,            # Das-Dennis parameter for balanced regime delta_2 = 1/H
-    rho=0.7,         # fraction of Tmax allocated to RL adaptation phase
-    W=20,            # EMA sliding window size (payoff estimation)
-    eps0=0.1,        # initial ε for ε-greedy action selection (decays to eps_min)
-    eps_min=0.01,
-    alpha_rl=0.1,    # Q-learning step size
-    gamma=0.9,       # discount factor
-    lam=0.9,         # EMA smoothing coefficient for payoffs
-    sigma0=(0.10, 0.10, 0.80),  # initial regime probabilities (fine/balanced/coarse)
-    alpha_reward=1.0,           # weight of Riesz-energy improvement in reward
-    q_reset_every=1000,         # soft Q-table reset period (during adaptation)
-    q_reset_alpha=0.1,          # fraction of Q wiped per reset
+    mu=100,           # population size
+    H=12,             # Das-Dennis parameter; balanced step is delta_2 = 1/H
+    rho=0.7,          # fraction of T_max spent adapting z_ref
+    W=20,             # sliding window for the payoff EMA
+    eps0=0.1, eps_min=0.01,        # eps-greedy schedule
+    alpha_rl=0.1, gamma=0.9,       # Q-learning
+    lam=0.9,                       # payoff EMA smoothing
+    sigma0=(0.10, 0.10, 0.80),     # initial regime probabilities
+    alpha_reward=1.0,              # weight of the uniformity term in r_t
+    q_reset_every=1000, q_reset_alpha=0.1,
+    zref_max=10.0,                 # the reference point lives in [1+eps, 10]^m
+    q_update_regimes="all",        # "balanced" reproduces Eq. 10 literally
+    sigma_floor=0.05,              # replicator-MUTATOR floor; 0 = plain Eq. 9
+    action_every=1,                # planner acts every tau generations
+    reward_hv="fixed",             # or "adaptive" (HV against the moving z_ref)
+    geometry_mode="curvature",     # or "contour" (Eq. 6), or "both"
+    eval_every=1,
 )
 ```
 
-### Accessing the History object
+---
 
-```python
-import numpy as np
+## Implementation notes
 
-hist.hv_adaptive    # list[float] — HV w.r.t. adaptive z_ref
-hist.hv_ext_far     # list[float] — HV w.r.t. z_ref_true_nadir + 1.1 (Cuadro 2)
-hist.hv_ext_near    # list[float] — HV w.r.t. z_ref_true_nadir + 0.1 (robustness check)
-hist.igd_plus       # list[float]
-hist.riesz_log      # list[float] — log Riesz energy E^ln_s(And(t))
-hist.dispersion     # list[float] — D(t), mean per-dim std dev
-hist.zref           # list[np.ndarray] — z_ref(t) trajectory
-hist.sigma          # list[np.ndarray] — σ(t) (only during adaptation phase)
-hist.regime         # list[int]        — k_t chosen at each generation
-hist.reward         # list[float]      — r_t (only during adaptation phase)
-```
+**Q-learning update order (Eq. 10).** The bootstrap target needs
+`max_j Q[s_{t+1}, (k_{t+1}, j)]`, i.e. the regime the replicator dynamics will
+pick at `t+1`. The update is therefore deferred by one step: `(s_t, k_t, j_t)`
+is stashed and the TD update completed at the start of generation `t+1`. This
+preserves the dependency structure of the equation exactly.
+
+**Hypervolume.** pymoo's exact `HV` (WFG algorithm) for the indicator
+evaluations and for the elimination step, with a Monte-Carlo backend selected
+automatically above 5 objectives, so nothing depends on exact HV staying
+affordable.
+
+**Deviations from the pseudocode**, all deliberate and all switchable:
+`q_update_regimes="all"`, `sigma_floor > 0`, `action_every > 1`,
+`reward_hv="fixed"`, the box bound on `z_ref`, and the two-sided `E_norm`.
+Each is justified in `RESPUESTAS.md`, and each has the literal behaviour of the
+proposal available as an option.
 
 ---
 
-## Algorithm overview (Algorithm 1)
-
-```
-Inputs: problem, mu=100, Tmax, rho=0.7, W, eps0=0.1, H=12
-Outputs: non-dominated set P
-
-1.  t_adapt = ceil(rho * Tmax)
-2.  Initialize P with mu random solutions; sigma = (0.10, 0.10, 0.80)
-3.  Q[s,(k,j)] = 0  (675 states × 18 actions)
-4.  z_ref = nadir_hat + 1 * ones  [satisfies z_ref >= (1,...,1) after normalization]
-
-5.  for t = 1 ... Tmax:
-6.    Estimate ideal, nadir from P; normalize objective space
-7.    if t <= t_adapt:    [Adaptation phase]
-8.      Compute state s_t = (D_norm, HV_norm, t/Tmax, g_hat, E_norm) -> discrete index
-9.      Update EMA payoffs u_k(sigma, t)  using sliding window W       [Eq. 7-8]
-10.     Update sigma(t) via replicator dynamics                         [Eq. 9]
-11.     Sample k_t ~ Categorical(sigma(t))
-12.     Select j_t = argmax_j Q[s_t, (k_t, j)] or uniform (eps-greedy)
-13.     Complete deferred Q-update from t-1 now that (s_t, k_t) are known [Eq. 10]
-14.     Update z_ref_i <- max(1, z_ref_i + s*delta_{k_t})              [Sec. 2.2]
-15.   else:               [Refinement phase]
-16.     z_ref stays fixed at z_ref(t_adapt)
-17.   Generate offspring via SBX (pc=1.0, eta_c=15) + PM (pm=1/n, eta_m=20)
-18.   P' = P + {offspring}; eliminate least-HVC individual from worst front
-19.   Compute reward r_t = Delta_HV_norm + alpha * Delta_E_norm
-20.   Store (s_t, k_t, j_t, r_t) for deferred Q-update at t+1
-21.   Decay eps linearly to eps_min
-22. return non-dominated P
-```
-
----
-
-## Key implementation decisions
-
-### IMOP3 / IMOP8 (Cuadro 1)
-The original IMOP suite (Tian et al., IEEE CIM 2019) is MATLAB-only (PlatEMO).
-The proposal's Cuadro 1 calls for 3-objective versions with n=(m-1)+l=7 variables,
-which do not match the published IMOP3/8 (2-objective, and 3-objective respectively
-but with different variable counts). We implement:
-
-- **IMOP3Like**: spherical front with a density-bias warp $x_i' = x_i^a$ ($a=0.05$),
-  faithfully reproducing the *mechanism* of the real IMOP suite (non-uniform
-  density over an otherwise-regular front).
-- **IMOP8Like**: multi-segment front (3 segments: linear / concave / convex),
-  producing genuine discontinuities as in IMOP8.
-
-To replace with the exact PlatEMO implementations, port `IMOP3.m` / `IMOP8.m`
-from https://github.com/BIMK/PlatEMO/tree/master/PlatEMO/Problems/IMOP and
-adapt them to the `Problem` interface in `problems.py`.
-
-### Q-learning update sequencing (Eq. 10)
-The pseudocode's bootstrap target for the update at generation $t$ is
-$\max_{j'} Q[s_{t+1}, (k_{t+1}, j')]$, which requires knowing $k_{t+1}$ first.
-We use a *deferred* (one-step-lag) update: $(s_t, k_t, j_t, r_t)$ is stashed
-and the TD update is completed at the *start* of generation $t+1$ once
-$(s_{t+1}, k_{t+1})$ are known.
-
-### HV computation
-We use pymoo's exact `HV` indicator (based on the WFG algorithm) for the
-external indicator evaluations (Cuadro 2) and our own incremental `hv_contributions`
-function (also based on pymoo) for the SMS-EMOA elimination step and the $\hat{g}(t)$
-feature (Eq. 6). For very large populations (mu=210, Sec. 2.2 sweep) where HV
-becomes a bottleneck, `FV-MOEA` integration is noted in the proposal (Sec. 6.1)
-as a future mitigation.
-
----
-
-## Note on results at reduced scale
-
-The demo (`run_demo.py`) uses mu=30 and Tmax≤500, which is far below the
-proposal's mu=100, Tmax=100,000. At this short scale the RL agent is still
-exploring (sigma has not yet converged) and the adaptive z_ref has had little
-time to home in on the geometry-optimal position. The full 100,000-generation
-run at mu=100 is where the planner's benefit is expected to be visible. This is
-consistent with the proposal's risk discussion (Sec. 6.1, "No estacionariedad
-del espacio de estado") and with the NRLPSO paper's observation that the
-replicator dynamics needs enough evaluations to distinguish regime payoffs.
-
----
-
-## References (from the proposal)
+## References
 
 1. Auger et al. (2009). Theory of the hypervolume indicator. FOGA.
-2. Beume et al. (2007). SMS-EMOA. Eur. J. Oper. Res.
+2. Beume, Naujoks & Emmerich (2007). SMS-EMOA. Eur. J. Oper. Res. 181(3).
 3. Brockhoff (2010). Optimal μ-distributions for HV. SEAL.
 4. Das & Dennis (1998). Normal-boundary intersection. SIAM J. Optim.
 5. Hamdi et al. (2026). NRLPSO. ICAART.
-6. Ishibuchi et al. (2017). Reference point specification for HV. GECCO.
-7. Ishibuchi et al. (2018). Dynamic specification of a reference point. CEC.
-8. Ishibuchi et al. (2018). Two reference points in HV-based MOEA. PPSN.
-9. Morales-Paredes et al. (2025). Reference point specification in greedy HV. GECCO.
-10. Nemhauser et al. (1978). Submodular set functions. Math. Programming.
-11. Shang & Ishibuchi et al. (2021). HV-optimal μ-distributions. arXiv:2104.09736.
-12. Tian et al. (2019). Diversity assessment of MOEAs. IEEE CIM.
-13. Zitzler et al. (2007). The HV indicator revisited. EMO.
+6. Ishibuchi, Imada, Setoguchi & Nojima (2017). Reference point specification in
+   hypervolume calculation. GECCO.
+7. Ishibuchi, Imada, Masuyama & Nojima (2018). Dynamic specification of a
+   reference point for hypervolume calculation in SMS-EMOA. CEC, pp. 701–708.
+8. Ishibuchi, Imada, Masuyama & Nojima (2018). Use of two reference points in
+   hypervolume-based EMO. PPSN.
+9. Morales-Paredes, Falcón-Cardona et al. (2025). Reference point specification
+   in greedy inclusion HV-based subset selection. GECCO.
+10. Nemhauser, Wolsey & Fisher (1978). Submodular set functions. Math. Prog.
+11. Shang, Ishibuchi et al. (2021). HV-optimal μ-distributions. arXiv:2104.09736.
+12. Tian, Cheng, Zhang, Cheng & Jin (2019). Diversity assessment of MOEAs
+    (the IMOP suite). IEEE Comput. Intell. Mag. 14(3).
+13. Trautmann, Wagner & Brockhoff (2013). R2-EMOA. LION 7, LNCS 7997.
+14. Zitzler, Brockhoff & Thiele (2007). The HV indicator revisited. EMO.
