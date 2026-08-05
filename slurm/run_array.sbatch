@@ -9,23 +9,30 @@
 #
 #     python3 aggregate_results.py --root results/full --outdir results/full
 #
-# STILL TO CONFIRM ON ixachi:
-#   * --cpus-per-task : must not exceed the cores per node of oc_cpus.
-#                       Check with:  sinfo -o "%20N %10c %10m %30G %10T"
-#   * --time          : must not exceed the partition TIMELIMIT (`sinfo -s`).
-#                       48 h assumes ~1 core-hour per run and 120 runs per
-#                       array task at 16 cores; re-time after the single-run
-#                       measurement.
+# Sized from ixachi as observed on 2026-08:
+#   gold5320  nodo[1-8]              52 cores, 256 GB, TIMELIMIT 60 days
+#   ixachi    nodo[1-8] + graphos    mixed CPU/GPU nodes
+#   gpu       graphos[1-4]           GPU nodes
 #
-# This workload is pure CPU (numpy / pymoo). Do NOT submit it to oc_gpu: there
-# is no GPU code path, so it would occupy an H200 for exactly zero speedup.
+# gold5320 is chosen because it is CPU-only: the `ixachi` partition also spans
+# the graphos GPU nodes, and this workload is pure CPU (numpy / pymoo) with no
+# GPU code path, so landing on one would occupy an accelerator for exactly
+# zero speedup.  Override at submission time if needed:
+#     sbatch --partition=<other> --array=0-13 slurm/run_array.sbatch
+#
+# Half a node per task (26 of 52 cores) so two tasks can share a node and the
+# array starts draining without waiting for whole nodes to free up.
+# 120 runs per task / 26 cores * ~1 core-hour ~= 5 h; 12 h is the safety
+# margin, far inside the 60-day partition limit.
+# 2 GB/core is comfortable against the measured ~400 MB peak per run, and well
+# inside the 256 GB / 52 cores ~= 4.9 GB per core the nodes actually have.
 # ---------------------------------------------------------------------------
 #SBATCH --job-name=rlrp
 #SBATCH --array=0-13
-#SBATCH --partition=oc_cpus
-#SBATCH --cpus-per-task=16
+#SBATCH --partition=gold5320
+#SBATCH --cpus-per-task=26
 #SBATCH --mem-per-cpu=2G
-#SBATCH --time=48:00:00
+#SBATCH --time=12:00:00
 #SBATCH --output=logs/rlrp_%A_%a.out
 #SBATCH --error=logs/rlrp_%A_%a.err
 

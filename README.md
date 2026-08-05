@@ -181,9 +181,11 @@ sbatch --array=0-13 slurm/run_array.sbatch
 ```
 
 The workload is pure CPU (numpy / pymoo); there is no GPU code path, so it
-belongs on a CPU partition. Peak memory is ~400 MB per concurrent run at
+belongs on a CPU-only partition. Peak memory is ~400 MB per concurrent run at
 `T_max = 100000` — the per-generation history is held in RAM until the run
-ends — hence `--mem-per-cpu=2G`.
+ends — hence `--mem-per-cpu=2G`. The partition, core count and wall clock in
+the script are set for ixachi's `gold5320` (52-core, 256 GB nodes); override
+with `sbatch --partition=... --array=0-13 slurm/run_array.sbatch` elsewhere.
 
 Each task writes its summary CSVs to `results/full/<problem>/` and its
 per-generation histories into the shared `results/full/history/` tree. When
