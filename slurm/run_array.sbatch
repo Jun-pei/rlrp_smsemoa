@@ -58,10 +58,19 @@ export OPENBLAS_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1
 
+# Locate the repository.  NOT via ${BASH_SOURCE[0]}: sbatch copies the script
+# into a spool directory before executing it, so BASH_SOURCE points at
+# /var/spool/... and every path derived from it is wrong.  SLURM_SUBMIT_DIR is
+# the directory sbatch was invoked from, which is the repository itself.
+REPO=${RLRP_REPO:-${SLURM_SUBMIT_DIR:-$PWD}}
+if [[ ! -f "$REPO/run_full_experiment.py" ]]; then
+    echo "ERROR: '$REPO' is not the rlrp_smsemoa repository." >&2
+    echo "Submit from inside it, or set RLRP_REPO=/path/to/rlrp_smsemoa." >&2
+    exit 1
+fi
 # The repository root IS the package, so its PARENT goes on the import path.
-REPO_PARENT=$(dirname "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)")
-export PYTHONPATH="$REPO_PARENT:${PYTHONPATH:-}"
-cd "$REPO_PARENT/rlrp_smsemoa"
+export PYTHONPATH="$(dirname "$REPO"):${PYTHONPATH:-}"
+cd "$REPO"
 
 OUT=results/full
 mkdir -p logs "$OUT"
