@@ -3,9 +3,12 @@ tests_reference_sets.py
 =======================
 Validation of every reference set Z used for IGD+ (Definition D2 / Section 2
 of performance.py), over the whole benchmark: the six DTLZ/WFG problems and
-all eight IMOP problems.  Run with::
+all eight IMOP problems.  Run from inside the repository with::
 
-    python3 -m rlrp_smsemoa.tests_reference_sets
+    python3 tests_reference_sets.py
+
+(or, from the repository's parent directory,
+``python3 -m rlrp_smsemoa.tests_reference_sets``).
 
 Two independent checks per problem:
 
@@ -22,11 +25,16 @@ attainable tolerance differs by problem (IMOP8 is extremely multimodal).
 """
 
 from __future__ import annotations
+import sys as _sys, os as _os
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 import numpy as np
 from scipy.spatial import cKDTree
 
-from .problems import get_problem, reference_set, PROBLEM_NAMES, problem_n_obj
-from .imop import _nd_filter
+from rlrp_smsemoa.imop import _nd_filter
+from rlrp_smsemoa.problems import (
+    PROBLEM_NAMES, get_problem, problem_n_obj, reference_set,
+)
 
 
 def _dominated_by(sample: np.ndarray, Z: np.ndarray, block: int = 512) -> int:

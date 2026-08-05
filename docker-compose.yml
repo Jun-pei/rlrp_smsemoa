@@ -54,4 +54,4 @@ services:
   # Validation of every IGD+ reference set.
   check_reference_sets:
     build: .
-    command: python -m rlrp_smsemoa.tests_reference_sets
+    command: python rlrp_smsemoa/tests_reference_sets.py

@@ -223,7 +223,7 @@ python3 run_sensitivity.py --problem dtlz2 --param rho --values 0.5 0.7 0.9
 ## Validating the reference sets
 
 ```bash
-python3 -m rlrp_smsemoa.tests_reference_sets
+python3 tests_reference_sets.py
 ```
 
 Checks, for all fourteen problems, that no point of `Z` is dominated by a large
