@@ -161,6 +161,48 @@ i.e. nothing is thinned; raise it if a large-`mu` sweep makes it the bottleneck.
 
 ---
 
+## Running on a cluster
+
+**Python 3.10 or newer is required** — pymoo 0.6.1.6 declares
+`requires_python >= 3.10`, so a system default of 3.9 will not work. Load a
+newer interpreter (e.g. a conda module) and build an environment:
+
+```bash
+module load conda/conda-2026          # ships Python 3.13.11
+conda create -y -n rlrp python=3.13
+source activate rlrp
+pip install -r requirements.txt       # cp313 wheels exist for all four
+```
+
+One array task per problem, all methods and seeds inside the task:
+
+```bash
+sbatch --array=0-13 slurm/run_array.sbatch
+```
+
+Each task writes its summary CSVs to `results/full/<problem>/` and its
+per-generation histories into the shared `results/full/history/` tree. When
+every task has finished, merge them:
+
+```bash
+python3 aggregate_results.py --root results/full --outdir results/full
+```
+
+Time to target (D5) is recomputed during the merge, because it is defined
+relative to the best HVR reached by *any* method on that (problem, seed) and
+each array task only saw its own problem.
+
+**Sizing.** Measured at `mu=100`, `T_max=100000`, `eval_every=1`, one core per
+run: roughly **1 core-hour per run** on a 3-objective DTLZ/WFG problem
+(30–49 ms/generation depending on method and problem; the bi-objective IMOPs
+are cheaper). The full grid is 14 × 4 × 30 = 1680 runs ≈ **1700 core-hours**,
+so ~2 days of wall time on 32 cores. Setting `--eval_every 100` cuts it to
+≈ 350 core-hours at the cost of evaluating the external indicators on a
+1000-point grid instead of every generation — the per-generation log is
+unaffected either way.
+
+---
+
 ## Sensitivity analysis (Sec. 5.3 a–c)
 
 ```bash
