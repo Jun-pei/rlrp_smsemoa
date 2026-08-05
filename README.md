@@ -180,6 +180,11 @@ One array task per problem, all methods and seeds inside the task:
 sbatch --array=0-13 slurm/run_array.sbatch
 ```
 
+The workload is pure CPU (numpy / pymoo); there is no GPU code path, so it
+belongs on a CPU partition. Peak memory is ~400 MB per concurrent run at
+`T_max = 100000` — the per-generation history is held in RAM until the run
+ends — hence `--mem-per-cpu=2G`.
+
 Each task writes its summary CSVs to `results/full/<problem>/` and its
 per-generation histories into the shared `results/full/history/` tree. When
 every task has finished, merge them:

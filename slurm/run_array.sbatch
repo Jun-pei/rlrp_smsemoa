@@ -9,21 +9,25 @@
 #
 #     python3 aggregate_results.py --root results/full --outdir results/full
 #
-# CHECK BEFORE THE FIRST SUBMISSION -- these are placeholders, not defaults
-# that are known to be right for ixachi:
-#   * --partition        : see `sinfo -s`
-#   * --cpus-per-task    : do not exceed the cores per node of that partition
-#   * --time             : see the partition's TIMELIMIT in `sinfo -s`
-#   * the conda module name, if it ever changes
+# STILL TO CONFIRM ON ixachi:
+#   * --cpus-per-task : must not exceed the cores per node of oc_cpus.
+#                       Check with:  sinfo -o "%20N %10c %10m %30G %10T"
+#   * --time          : must not exceed the partition TIMELIMIT (`sinfo -s`).
+#                       48 h assumes ~1 core-hour per run and 120 runs per
+#                       array task at 16 cores; re-time after the single-run
+#                       measurement.
+#
+# This workload is pure CPU (numpy / pymoo). Do NOT submit it to oc_gpu: there
+# is no GPU code path, so it would occupy an H200 for exactly zero speedup.
 # ---------------------------------------------------------------------------
 #SBATCH --job-name=rlrp
 #SBATCH --array=0-13
+#SBATCH --partition=oc_cpus
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=8G
+#SBATCH --mem-per-cpu=2G
 #SBATCH --time=48:00:00
 #SBATCH --output=logs/rlrp_%A_%a.out
 #SBATCH --error=logs/rlrp_%A_%a.err
-# #SBATCH --partition=<fill in from `sinfo -s`>
 
 set -euo pipefail
 
