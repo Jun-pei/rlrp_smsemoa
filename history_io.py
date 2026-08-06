@@ -64,6 +64,15 @@ def load_history(path: str) -> pd.DataFrame:
     return pd.read_csv(path)
 
 
+def load_meta(path: str) -> dict:
+    """Run metadata stored beside a history (``{}`` if it is missing)."""
+    mpath = path.replace(".csv.gz", ".meta.json")
+    if not os.path.exists(mpath):
+        return {}
+    with open(mpath) as fh:
+        return json.load(fh)
+
+
 def iter_histories(histdir: str, problem: str | None = None,
                    method: str | None = None):
     """Yield ``(problem, method, seed, DataFrame)`` for everything on disk."""

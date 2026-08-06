@@ -11,6 +11,15 @@ per problem -- into the single set of tables the protocol reports.
 target (Definition D5) is recomputed here rather than reused, because it is
 defined relative to the best HVR reached by ANY method on that (problem, seed)
 and each array task only ever saw its own problem.
+
+If a task was killed before it finished -- a wall-clock timeout, most likely --
+it never wrote its ``results_<problem>.csv``, even though the runs it did
+complete are safely on disk as per-generation histories.  ``--histdir`` covers
+that case: every summary row is rebuilt from the histories themselves, so
+nothing has to be recomputed and no completed run is lost.
+
+    python3 aggregate_results.py --histdir results/full/history \\
+        --outdir results/full
 """
 from __future__ import annotations
 import sys as _sys, os as _os
@@ -23,26 +32,51 @@ import os
 import pandas as pd
 
 from rlrp_smsemoa.algorithm import METHODS
-from rlrp_smsemoa.experiment import add_time_to_target
+from rlrp_smsemoa.experiment import add_time_to_target, summary_row_from_history
 from rlrp_smsemoa.run_full_experiment import INDICATORS, _iqr, write_stats
+
+
+def _from_summaries(root: str) -> pd.DataFrame:
+    paths = sorted(glob.glob(os.path.join(root, "**", "results_*.csv"),
+                             recursive=True))
+    if not paths:
+        raise SystemExit(f"no results_*.csv under {root} "
+                         f"(use --histdir to rebuild from the histories instead)")
+    print(f"merging {len(paths)} summary file(s)")
+    return pd.concat([pd.read_csv(p) for p in paths], ignore_index=True)
+
+
+def _from_histories(histdir: str) -> pd.DataFrame:
+    paths = sorted(glob.glob(os.path.join(histdir, "*", "*", "seed*.csv.gz")))
+    if not paths:
+        raise SystemExit(f"no seed*.csv.gz under {histdir}")
+    print(f"rebuilding {len(paths)} run(s) from their histories")
+    rows = []
+    for i, p in enumerate(paths, 1):
+        try:
+            rows.append(summary_row_from_history(p))
+        except Exception as exc:                      # truncated / corrupt file
+            print(f"  SKIP {p}: {exc}")
+        if i % 100 == 0:
+            print(f"  {i}/{len(paths)}", flush=True)
+    return pd.DataFrame(rows)
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--root", required=True,
+    ap.add_argument("--root",
                     help="directory searched recursively for results_*.csv")
+    ap.add_argument("--histdir",
+                    help="rebuild every summary row from the per-generation "
+                         "histories under this directory (use after a timeout)")
     ap.add_argument("--outdir", required=True)
     ap.add_argument("--methods", nargs="+", default=None)
     a = ap.parse_args()
 
-    paths = sorted(glob.glob(os.path.join(a.root, "**", "results_*.csv"),
-                             recursive=True))
-    if not paths:
-        raise SystemExit(f"no results_*.csv under {a.root}")
-    print(f"merging {len(paths)} file(s)")
-
-    full = pd.concat([pd.read_csv(p) for p in paths], ignore_index=True)
+    if not a.root and not a.histdir:
+        raise SystemExit("give --root, --histdir, or both")
+    full = (_from_histories(a.histdir) if a.histdir else _from_summaries(a.root))
     dup = full.duplicated(subset=["problem", "method", "seed"]).sum()
     if dup:
         print(f"WARNING: {dup} duplicated (problem, method, seed) rows -- "

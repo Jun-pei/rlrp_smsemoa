@@ -51,7 +51,10 @@ import numpy as np
 import pandas as pd
 
 from rlrp_smsemoa.algorithm import METHODS
-from rlrp_smsemoa.experiment import add_time_to_target, get_frame, run_single
+from rlrp_smsemoa.experiment import (
+    add_time_to_target, get_frame, run_single, summary_row_from_history,
+)
+from rlrp_smsemoa.history_io import history_path
 from rlrp_smsemoa.problems import BENCHMARK, DTLZ_WFG_NAMES, IMOP_SUITE, problem_n_obj
 from rlrp_smsemoa.stats import friedman_test, quade_test, wilcoxon_bonferroni
 
@@ -82,7 +85,22 @@ def run_problem(pname, methods, n_seeds, args):
                  n_bins_fine=args.n_bins_fine, n_bins_coarse=args.n_bins_coarse,
                  action_every=args.action_every)
             for meth in methods for s in range(n_seeds)]
-    rows, t0 = [], time.time()
+    rows = []
+    if args.skip_existing:
+        todo = []
+        for j in jobs:
+            p = history_path(args.histdir, pname, j["method_name"], j["seed"])
+            # A run already on disk is not re-run; its summary row is rebuilt
+            # from the stored history so the output stays complete.
+            if os.path.exists(p):
+                rows.append(summary_row_from_history(p))
+            else:
+                todo.append(j)
+        if rows:
+            print(f"  [{pname}] resuming: {len(rows)} of {len(jobs)} runs already "
+                  f"on disk", file=sys.stderr)
+        jobs = todo
+    t0 = time.time()
     if args.processes <= 1:
         for j in jobs:
             rows.append(_job(j))
@@ -161,6 +179,11 @@ def main():
     ap.add_argument("--outdir", default="results")
     ap.add_argument("--histdir", default=None,
                     help="where per-generation histories go (default <outdir>/history)")
+    ap.add_argument("--skip_existing", action="store_true",
+                    help="do not re-run a (problem, method, seed) whose history is "
+                         "already in --histdir; rebuild its summary row from the "
+                         "stored history instead.  Use this to resume after a job "
+                         "hit its wall clock.")
     args = ap.parse_args()
 
     problems = expand(args.problems)

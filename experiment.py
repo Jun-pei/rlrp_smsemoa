@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 
 from .algorithm import METHODS
-from .history_io import load_history, save_history
+from .history_io import load_history, load_meta, save_history
 from .performance import anytime_score, time_to_target
 from .problems import get_problem, make_reference_frame, problem_n_obj
 
@@ -74,6 +74,53 @@ def run_single(problem_name: str, method_name: str, seed: int, t_max: int,
     if keep_history:
         row["_history"] = df
         row["_X"], row["_F"] = X, F
+    return row
+
+
+def _last_finite(df: pd.DataFrame, col: str) -> float:
+    if col not in df:
+        return np.nan
+    v = df[col].to_numpy(dtype=float)
+    v = v[np.isfinite(v)]
+    return float(v[-1]) if v.size else np.nan
+
+
+def summary_row_from_history(hist_path: str) -> dict:
+    """Rebuild a finished run's summary row from its stored history.
+
+    Nothing has to be recomputed, because every generation was logged: the
+    final-population indicators are the last recorded hvr / igd_plus /
+    energy_ratio, and the anytime score (D4) is the mean of the hvr column.
+    With ``eval_every=1`` these are identical to what ``run_single`` returned,
+    since the last row is recorded after the last generation, on the same
+    population.
+
+    This is what makes an interrupted batch job recoverable: histories are
+    written as each run finishes, whereas ``results_<problem>.csv`` is only
+    written once a whole task completes, so a job that hits its wall clock
+    keeps all of its data but none of its summaries.
+    """
+    df = load_history(hist_path)
+    meta = load_meta(hist_path)
+
+    parts = os.path.normpath(hist_path).split(os.sep)
+    row = dict(
+        problem=meta.get("problem", parts[-3] if len(parts) >= 3 else None),
+        method=meta.get("method", parts[-2] if len(parts) >= 2 else None),
+        seed=meta.get("seed", int(parts[-1][4:7]) if parts[-1][:4] == "seed" else -1),
+        m=meta.get("m"), mu=meta.get("mu"), t_max=meta.get("t_max"),
+        n_final=meta.get("mu"),
+        hvr_final=_last_finite(df, "hvr"),
+        igd_plus_final=_last_finite(df, "igd_plus"),
+        energy_ratio_final=_last_finite(df, "energy_ratio"),
+        hvr_anytime=anytime_score(df["hvr"].to_numpy() if "hvr" in df else []),
+        hv_adaptive_final=_last_finite(df, "hv_adaptive"),
+        gamma_final=_last_finite(df, "gamma_geom"),
+        zref_mean_final=float(np.mean([df[c].iloc[-1] for c in df.columns
+                                       if c.startswith("zref")])) if len(df) else np.nan,
+        n_generations=int(len(df)), history_path=hist_path,
+    )
+    row.update({k: v for k, v in meta.items() if k.startswith("qcov_")})
     return row
 
 
