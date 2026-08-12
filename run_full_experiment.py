@@ -119,6 +119,16 @@ def run_problem(pname, methods, n_seeds, args):
 
 
 def write_stats(full, problems, methods, outdir):
+    """Section 5.3 tests.  Needs at least two methods to compare, and three
+    for a rank test -- an array task that runs a single (problem, method) pair
+    has neither, and its real statistics come later from aggregate_results.py
+    over the whole grid."""
+    if len(methods) < 2:
+        with open(os.path.join(outdir, "stats.txt"), "w") as fh:
+            fh.write(f"Only one method present ({methods}); pairwise and rank "
+                     f"tests need at least two.\nRun aggregate_results.py over "
+                     f"the whole grid for the Section 5.3 statistics.\n")
+        return
     with open(os.path.join(outdir, "stats.txt"), "w") as fh:
         for pname in problems:
             sub = full[full["problem"] == pname]
@@ -137,12 +147,13 @@ def write_stats(full, problems, methods, outdir):
                 signed = mat if higher_better else -mat
                 fh.write(f"\n=== {pname} : {col} "
                          f"({'higher' if higher_better else 'lower'} is better) ===\n")
-                fr = friedman_test(signed, cols)
-                fh.write(f"Friedman: stat={fr['stat']:.4f} p={fr['p']:.4g} "
-                         f"ranks={ {k: round(v, 3) for k, v in fr['avg_ranks'].items()} }\n")
-                qd = quade_test(signed, cols)
-                fh.write(f"Quade:    stat={qd['stat']:.4f} p={qd['p']:.4g} "
-                         f"ranks={ {k: round(v, 3) for k, v in qd['avg_ranks'].items()} }\n")
+                if len(cols) >= 3:      # rank tests need three or more groups
+                    fr = friedman_test(signed, cols)
+                    fh.write(f"Friedman: stat={fr['stat']:.4f} p={fr['p']:.4g} "
+                             f"ranks={ {k: round(v, 3) for k, v in fr['avg_ranks'].items()} }\n")
+                    qd = quade_test(signed, cols)
+                    fh.write(f"Quade:    stat={qd['stat']:.4f} p={qd['p']:.4g} "
+                             f"ranks={ {k: round(v, 3) for k, v in qd['avg_ranks'].items()} }\n")
                 for pair, r in wilcoxon_bonferroni(signed, cols).items():
                     fh.write(f"  Wilcoxon {pair[0]} vs {pair[1]}: p_adj={r['p_adj']:.4g} "
                              f"effect={r['effect_size']:+.3f} winner={r['winner']}\n")
