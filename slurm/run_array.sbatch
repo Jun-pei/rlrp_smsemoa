@@ -1,40 +1,53 @@
 #!/bin/bash
 # ---------------------------------------------------------------------------
-# Full protocol as a SLURM job array: one array task per problem, all methods
-# and all seeds inside the task.
+# Full protocol as a SLURM job array: one array task per (problem, method)
+# pair, 30 seeds inside the task.
 #
-#     sbatch --array=0-13 slurm/run_array.sbatch
+#     mkdir -p logs
+#     sbatch --array=0-55 slurm/run_array.sbatch
 #
 # then, once every task has finished:
 #
-#     python3 aggregate_results.py --root results/full --outdir results/full
+#     python3 aggregate_results.py --histdir results/full/history \
+#         --outdir results/full
 #
-# Sized from ixachi as observed on 2026-08:
-#   gold5320  nodo[1-8]              52 cores, 256 GB, TIMELIMIT 60 days
-#   ixachi    nodo[1-8] + graphos    mixed CPU/GPU nodes
-#   gpu       graphos[1-4]           GPU nodes
+# The array is IDEMPOTENT: --skip_existing means a resubmission re-runs only
+# the (problem, method, seed) combinations whose history is not yet on disk.
+# Submit it again after a partial run and it fills in the gaps.
 #
-# gold5320 is chosen because it is CPU-only: the `ixachi` partition also spans
-# the graphos GPU nodes, and this workload is pure CPU (numpy / pymoo) with no
-# GPU code path, so landing on one would occupy an accelerator for exactly
-# zero speedup.  Override at submission time if needed:
-#     sbatch --partition=<other> --array=0-13 slurm/run_array.sbatch
+# SIZING, measured on ixachi rather than estimated
+# ------------------------------------------------
+# The first attempt (14 tasks x 26 cpus, one task per problem) showed that
+# throughput is governed by how many tasks land on the same node:
 #
-# Half a node per task (26 of 52 cores) so two tasks can share a node and the
-# array starts draining without waiting for whole nodes to free up.
-# Measured on ixachi: 70 min for one RL-RP run on DTLZ2 at mu=100,
-# T_max=100000, eval_every=1.  120 runs per task / 26 cores ~= 5.4 h there,
-# and WFG4/WFG9 cost ~1.35x that, so ~7.5 h worst case.  16 h is the margin,
-# far inside the 60-day partition limit.
-# 2 GB/core is comfortable against the measured ~400 MB peak per run, and well
-# inside the 256 GB / 52 cores ~= 4.9 GB per core the nodes actually have.
+#     tasks/node   observed h per run
+#         1 (solo)      1.17     <- the calibration run, --cpus-per-task=1
+#         2             5.3
+#         4            16.0
+#
+# `sinfo` reports 52 CPUS per node, but those are hyperthreads over 26
+# physical cores, so two 26-process tasks already put two processes on every
+# core.  The worker count is therefore derived from the PHYSICAL cores in the
+# allocation (see PROCS below) instead of from SLURM_CPUS_PER_TASK directly:
+# with --cpus-per-task=26 and 2 threads/core that is 13 workers, so two tasks
+# sharing a node exactly fill its 26 real cores and never oversubscribe.
+#
+# EVAL_EVERY defaults to 100, which thins ONLY the external indicators
+# (HVR / IGD+ / Eratio against the reference set Z) -- about 83% of the
+# runtime.  Every generation is still logged in full.  At T_max = 100000 that
+# still leaves 1000 points on the anytime curve, measured to shift D4 by
+# ~1e-4 (method differences are ~1e-1) and to leave the final indicators
+# bit-identical, since the last generation is always evaluated.
+# Override with:  EVAL_EVERY=1 sbatch --array=0-55 slurm/run_array.sbatch
+#
+# This workload is pure CPU: do not send it to a GPU partition.
 # ---------------------------------------------------------------------------
 #SBATCH --job-name=rlrp
-#SBATCH --array=0-13
+#SBATCH --array=0-55
 #SBATCH --partition=gold5320
 #SBATCH --cpus-per-task=26
 #SBATCH --mem-per-cpu=2G
-#SBATCH --time=16:00:00
+#SBATCH --time=24:00:00
 #SBATCH --output=logs/rlrp_%A_%a.out
 #SBATCH --error=logs/rlrp_%A_%a.err
 
@@ -42,17 +55,18 @@ set -euo pipefail
 
 PROBLEMS=(dtlz1 dtlz2 minus-dtlz1 minus-dtlz2 wfg4 wfg9 \
           imop1 imop2 imop3 imop4 imop5 imop6 imop7 imop8)
-PROBLEM=${PROBLEMS[$SLURM_ARRAY_TASK_ID]}
+METHODS=("SMS-EMOA_balanced" "d-SMS-EMOA" "R2-EMOA" "RL-RP-SMS-EMOA")
+
+IDX=${SLURM_ARRAY_TASK_ID}
+PROBLEM=${PROBLEMS[$((IDX / ${#METHODS[@]}))]}
+METHOD=${METHODS[$((IDX % ${#METHODS[@]}))]}
 
 # The default system Python is 3.9, and pymoo 0.6.1.6 requires >= 3.10.
 module load conda/conda-2026
 source activate rlrp
 
-# The parallelism here is one process per run, so every library must stay
-# single-threaded: otherwise 26 concurrent processes each ask OpenBLAS for as
-# many threads as the node has cores.  The arrays in this workload are small
-# enough (mu x m) that BLAS would rarely thread anyway, so this costs nothing
-# and removes the possibility of a 26x52 oversubscription.
+# One process per run, so every library must stay single-threaded: otherwise
+# each worker asks OpenBLAS for as many threads as the node has cores.
 export OMP_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 export MKL_NUM_THREADS=1
@@ -72,23 +86,32 @@ fi
 export PYTHONPATH="$(dirname "$REPO"):${PYTHONPATH:-}"
 cd "$REPO"
 
+# Workers = PHYSICAL cores in the allocation, not hyperthreads.
+THREADS_PER_CORE=$(lscpu | awk -F: '/^Thread\(s\) per core/ {gsub(/ /,"",$2); print $2}')
+THREADS_PER_CORE=${THREADS_PER_CORE:-1}
+PROCS=$(( ${SLURM_CPUS_PER_TASK:-1} / THREADS_PER_CORE ))
+(( PROCS < 1 )) && PROCS=1
+
 OUT=results/full
 mkdir -p logs "$OUT"
 
-echo "task $SLURM_ARRAY_TASK_ID -> $PROBLEM on $(hostname), \
-${SLURM_CPUS_PER_TASK} cpus, started $(date)"
+echo "task $IDX -> $PROBLEM / $METHOD on $(hostname)"
+echo "  ${SLURM_CPUS_PER_TASK:-?} logical cpus, ${THREADS_PER_CORE} threads/core"\
+     "-> ${PROCS} workers; eval_every=${EVAL_EVERY:-100}; started $(date)"
 
-# Per-task outdir so the summary files of different tasks never collide;
-# the per-generation histories share one tree (paths already include the
-# problem name, so they cannot collide either).
+# Per-task outdir so the summary files of different tasks never collide; the
+# per-generation histories share one tree, whose paths already carry the
+# problem and method, so they cannot collide either.
 python3 run_full_experiment.py \
     --problems "$PROBLEM" \
+    --methods "$METHOD" \
     --n_seeds 30 \
     --t_max 100000 \
     --mu 100 \
-    --processes "${SLURM_CPUS_PER_TASK}" \
-    --eval_every 1 \
-    --outdir "$OUT/$PROBLEM" \
+    --processes "$PROCS" \
+    --eval_every "${EVAL_EVERY:-100}" \
+    --skip_existing \
+    --outdir "$OUT/${PROBLEM}__${METHOD}" \
     --histdir "$OUT/history"
 
-echo "task $SLURM_ARRAY_TASK_ID finished $(date)"
+echo "task $IDX finished $(date)"
