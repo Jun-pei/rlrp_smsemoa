@@ -96,9 +96,10 @@ def run_problem(pname, methods, n_seeds, args):
                 rows.append(summary_row_from_history(p))
             else:
                 todo.append(j)
-        if rows:
-            print(f"  [{pname}] resuming: {len(rows)} of {len(jobs)} runs already "
-                  f"on disk", file=sys.stderr)
+        # stdout, alongside the per-problem header: this is a summary, not the
+        # high-volume per-run progress that goes to stderr.
+        print(f"  [{pname}] resuming: {len(rows)} of {len(jobs)} runs already "
+              f"on disk, {len(todo)} to run", flush=True)
         jobs = todo
     t0 = time.time()
     if args.processes <= 1:
