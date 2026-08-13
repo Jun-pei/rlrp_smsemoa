@@ -60,8 +60,11 @@ def save_history(df: pd.DataFrame, histdir: str, problem: str, method: str,
     return path
 
 
-def load_history(path: str) -> pd.DataFrame:
-    return pd.read_csv(path)
+def load_history(path: str, usecols=None) -> pd.DataFrame:
+    """Read a stored history.  ``usecols`` (a list or a predicate on the column
+    name) restricts parsing to the columns actually needed, which roughly halves
+    the cost of a 100,000-generation file."""
+    return pd.read_csv(path, usecols=usecols)
 
 
 def load_meta(path: str) -> dict:

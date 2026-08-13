@@ -85,7 +85,23 @@ def _last_finite(df: pd.DataFrame, col: str) -> float:
     return float(v[-1]) if v.size else np.nan
 
 
-def history_is_complete(path: str) -> bool:
+#: the only columns a summary row needs out of a ~40-column history
+_SUMMARY_COLS = ("t", "hvr", "igd_plus", "energy_ratio", "hv_adaptive",
+                 "gamma_geom")
+
+
+def _summary_col(name: str) -> bool:
+    return name in _SUMMARY_COLS or name.startswith("zref")
+
+
+def load_summary_frame(path: str) -> pd.DataFrame:
+    """Read only what a summary row needs.  Reading all 40 columns of a
+    100,000-row history costs about twice as much, and over a full grid of
+    1680 runs that is the difference between minutes and an hour."""
+    return load_history(path, usecols=_summary_col)
+
+
+def history_is_complete(path: str, df: pd.DataFrame | None = None) -> bool:
     """Whether a stored history is readable AND covers its whole run.
 
     A job killed mid-write leaves a truncated or empty ``.csv.gz`` behind, so
@@ -93,20 +109,24 @@ def history_is_complete(path: str) -> bool:
     it as evidence is exactly what turned one interrupted run into a crash for
     a whole array task.  The history is written in a single call once the run
     ends, so a good file always reaches generation ``t_max``.
+
+    Pass ``df`` to validate a frame that has already been read, instead of
+    reading the file a second time.
     """
-    if not os.path.exists(path):
-        return False
-    try:
-        df = load_history(path)
-    except Exception:                     # empty, truncated, bad gzip
-        return False
+    if df is None:
+        if not os.path.exists(path):
+            return False
+        try:
+            df = load_summary_frame(path)
+        except Exception:                 # empty, truncated, bad gzip
+            return False
     if df.empty or "t" not in df.columns:
         return False
     t_max = load_meta(path).get("t_max")
     return t_max is None or int(df["t"].iloc[-1]) == int(t_max)
 
 
-def summary_row_from_history(hist_path: str) -> dict:
+def summary_row_from_history(hist_path: str, df: pd.DataFrame | None = None) -> dict:
     """Rebuild a finished run's summary row from its stored history.
 
     Nothing has to be recomputed, because every generation was logged: the
@@ -121,7 +141,8 @@ def summary_row_from_history(hist_path: str) -> dict:
     written once a whole task completes, so a job that hits its wall clock
     keeps all of its data but none of its summaries.
     """
-    df = load_history(hist_path)
+    if df is None:
+        df = load_summary_frame(hist_path)
     meta = load_meta(hist_path)
 
     parts = os.path.normpath(hist_path).split(os.sep)
@@ -145,16 +166,26 @@ def summary_row_from_history(hist_path: str) -> dict:
     return row
 
 
-def add_time_to_target(df: pd.DataFrame, q: float = 0.95) -> pd.DataFrame:
+def add_time_to_target(df: pd.DataFrame, q: float = 0.95,
+                       hvr_curves: dict | None = None) -> pd.DataFrame:
     """Definition D5.  Needs HVR_max across methods on the same (problem, seed),
-    so it is a post-processing step over the already-written histories."""
+    so it is a post-processing step over the already-written histories.
+
+    ``hvr_curves`` maps ``(problem, method, seed) -> hvr array`` for callers
+    that have already read the histories; without it each history is read
+    again, which over a full grid doubles the cost of aggregating.
+    """
     out = []
     for _, grp in df.groupby(["problem", "seed"]):
         curves = {}
         for _, r in grp.iterrows():
+            key = (r["problem"], r["method"], r["seed"])
+            if hvr_curves is not None and key in hvr_curves:
+                curves[r["method"]] = hvr_curves[key]
+                continue
             path = r.get("history_path")
             if isinstance(path, str) and os.path.exists(path):
-                curves[r["method"]] = load_history(path)["hvr"].to_numpy()
+                curves[r["method"]] = load_history(path, usecols=["hvr"])["hvr"].to_numpy()
         hvr_max = max((np.nanmax(c) for c in curves.values() if np.isfinite(c).any()),
                       default=np.nan)
         for _, r in grp.iterrows():

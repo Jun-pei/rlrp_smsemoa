@@ -33,7 +33,8 @@ import pandas as pd
 
 from rlrp_smsemoa.algorithm import METHODS
 from rlrp_smsemoa.experiment import (
-    add_time_to_target, history_is_complete, summary_row_from_history,
+    add_time_to_target, history_is_complete, load_summary_frame,
+    summary_row_from_history,
 )
 from rlrp_smsemoa.run_full_experiment import INDICATORS, _iqr, write_stats
 
@@ -48,19 +49,29 @@ def _from_summaries(root: str) -> pd.DataFrame:
     return pd.concat([pd.read_csv(p) for p in paths], ignore_index=True)
 
 
-def _from_histories(histdir: str) -> pd.DataFrame:
+def _from_histories(histdir: str, curves: dict) -> pd.DataFrame:
     paths = sorted(glob.glob(os.path.join(histdir, "*", "*", "seed*.csv.gz")))
     if not paths:
         raise SystemExit(f"no seed*.csv.gz under {histdir}")
     print(f"rebuilding {len(paths)} run(s) from their histories")
     rows, bad = [], []
     for i, p in enumerate(paths, 1):
+        # Read each history ONCE, and only the columns a summary needs; the
+        # hvr curve is kept so Definition D5 does not re-read every file.
+        try:
+            df = load_summary_frame(p)
+        except Exception:
+            df = None
         # An interrupted job can leave a truncated history behind; skip it
         # loudly rather than let it poison the aggregate.
-        if not history_is_complete(p):
+        if df is None or not history_is_complete(p, df):
             bad.append(p)
         else:
-            rows.append(summary_row_from_history(p))
+            row = summary_row_from_history(p, df)
+            rows.append(row)
+            if "hvr" in df:
+                curves[(row["problem"], row["method"], row["seed"])] = \
+                    df["hvr"].to_numpy()
         if i % 100 == 0:
             print(f"  {i}/{len(paths)}", flush=True)
     if bad:
@@ -85,7 +96,9 @@ def main():
 
     if not a.root and not a.histdir:
         raise SystemExit("give --root, --histdir, or both")
-    full = (_from_histories(a.histdir) if a.histdir else _from_summaries(a.root))
+    curves: dict = {}
+    full = (_from_histories(a.histdir, curves) if a.histdir
+            else _from_summaries(a.root))
     dup = full.duplicated(subset=["problem", "method", "seed"]).sum()
     if dup:
         print(f"WARNING: {dup} duplicated (problem, method, seed) rows -- "
@@ -93,7 +106,7 @@ def main():
         full = full.drop_duplicates(subset=["problem", "method", "seed"])
 
     os.makedirs(a.outdir, exist_ok=True)
-    full = add_time_to_target(full)
+    full = add_time_to_target(full, hvr_curves=curves)
     full.to_csv(os.path.join(a.outdir, "all_results.csv"), index=False)
 
     cols = [c for c, _ in INDICATORS] + ["time_to_target"]
