@@ -85,6 +85,27 @@ def _last_finite(df: pd.DataFrame, col: str) -> float:
     return float(v[-1]) if v.size else np.nan
 
 
+def history_is_complete(path: str) -> bool:
+    """Whether a stored history is readable AND covers its whole run.
+
+    A job killed mid-write leaves a truncated or empty ``.csv.gz`` behind, so
+    the existence of the file is not evidence that the run finished.  Treating
+    it as evidence is exactly what turned one interrupted run into a crash for
+    a whole array task.  The history is written in a single call once the run
+    ends, so a good file always reaches generation ``t_max``.
+    """
+    if not os.path.exists(path):
+        return False
+    try:
+        df = load_history(path)
+    except Exception:                     # empty, truncated, bad gzip
+        return False
+    if df.empty or "t" not in df.columns:
+        return False
+    t_max = load_meta(path).get("t_max")
+    return t_max is None or int(df["t"].iloc[-1]) == int(t_max)
+
+
 def summary_row_from_history(hist_path: str) -> dict:
     """Rebuild a finished run's summary row from its stored history.
 

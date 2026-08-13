@@ -32,7 +32,9 @@ import os
 import pandas as pd
 
 from rlrp_smsemoa.algorithm import METHODS
-from rlrp_smsemoa.experiment import add_time_to_target, summary_row_from_history
+from rlrp_smsemoa.experiment import (
+    add_time_to_target, history_is_complete, summary_row_from_history,
+)
 from rlrp_smsemoa.run_full_experiment import INDICATORS, _iqr, write_stats
 
 
@@ -51,14 +53,21 @@ def _from_histories(histdir: str) -> pd.DataFrame:
     if not paths:
         raise SystemExit(f"no seed*.csv.gz under {histdir}")
     print(f"rebuilding {len(paths)} run(s) from their histories")
-    rows = []
+    rows, bad = [], []
     for i, p in enumerate(paths, 1):
-        try:
+        # An interrupted job can leave a truncated history behind; skip it
+        # loudly rather than let it poison the aggregate.
+        if not history_is_complete(p):
+            bad.append(p)
+        else:
             rows.append(summary_row_from_history(p))
-        except Exception as exc:                      # truncated / corrupt file
-            print(f"  SKIP {p}: {exc}")
         if i % 100 == 0:
             print(f"  {i}/{len(paths)}", flush=True)
+    if bad:
+        print(f"  SKIPPED {len(bad)} incomplete histor{'y' if len(bad) == 1 else 'ies'}:")
+        for p in bad[:10]:
+            print(f"    {p}")
+        print("  re-run those with run_full_experiment.py --skip_existing")
     return pd.DataFrame(rows)
 
 

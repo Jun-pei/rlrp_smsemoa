@@ -52,7 +52,8 @@ import pandas as pd
 
 from rlrp_smsemoa.algorithm import METHODS
 from rlrp_smsemoa.experiment import (
-    add_time_to_target, get_frame, run_single, summary_row_from_history,
+    add_time_to_target, get_frame, history_is_complete, run_single,
+    summary_row_from_history,
 )
 from rlrp_smsemoa.history_io import history_path
 from rlrp_smsemoa.problems import BENCHMARK, DTLZ_WFG_NAMES, IMOP_SUITE, problem_n_obj
@@ -88,18 +89,25 @@ def run_problem(pname, methods, n_seeds, args):
     rows = []
     if args.skip_existing:
         todo = []
+        n_bad = 0
         for j in jobs:
             p = history_path(args.histdir, pname, j["method_name"], j["seed"])
-            # A run already on disk is not re-run; its summary row is rebuilt
-            # from the stored history so the output stays complete.
-            if os.path.exists(p):
+            # A COMPLETE run on disk is not re-run; its summary row is rebuilt
+            # from the stored history so the output stays complete.  A
+            # truncated one (a job killed mid-write) is re-run, and the new
+            # save overwrites it.
+            if history_is_complete(p):
                 rows.append(summary_row_from_history(p))
             else:
+                if os.path.exists(p):
+                    n_bad += 1
                 todo.append(j)
         # stdout, alongside the per-problem header: this is a summary, not the
         # high-volume per-run progress that goes to stderr.
         print(f"  [{pname}] resuming: {len(rows)} of {len(jobs)} runs already "
-              f"on disk, {len(todo)} to run", flush=True)
+              f"on disk, {len(todo)} to run"
+              + (f" ({n_bad} incomplete, will be overwritten)" if n_bad else ""),
+              flush=True)
         jobs = todo
     t0 = time.time()
     if args.processes <= 1:
