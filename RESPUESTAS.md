@@ -2,7 +2,9 @@
 
 Documento de acompañamiento al código. Cada sección responde una observación y
 apunta al archivo donde quedó implementada. Las secciones 1–10 siguen el orden
-en que se hicieron los comentarios; las 11–15 son los cambios adicionales.
+en que se hicieron los comentarios; las 11–14 y 16 son los cambios
+adicionales, y la **sección 15 reporta los resultados del protocolo completo**
+(1 680 corridas en el clúster ixachi).
 
 ---
 
@@ -408,7 +410,11 @@ tabla de valores finales y sólo aparece en las trayectorias.
 
 ---
 
-## 14. Complejidad muestral de la tabla Q — el hallazgo principal
+## 14. Complejidad muestral de la tabla Q — el diagnóstico
+
+> Los experimentos de esta sección son diagnósticos cortos (2–3 semillas) que
+> explican *por qué* falla el mecanismo. La confirmación con el protocolo
+> completo (30 semillas) está en la sección 15, y coincide.
 
 ### Diagnóstico (DTLZ2, µ=40)
 
@@ -527,7 +533,107 @@ HVR la sigue, hay diagnóstico y solución en la misma figura.
 
 ---
 
-## 15. Otros bugs corregidos
+## 15. Resultados del protocolo completo (14 problemas × 4 métodos × 30 semillas)
+
+Corrida en el clúster ixachi: 1 680 ejecuciones, T_max = 100 000, µ = 100,
+todas las generaciones guardadas. Medianas sobre 30 semillas.
+
+### Cuántas veces gana cada método (mejor mediana, 14 problemas)
+
+| Indicador | balanced | R2-EMOA | d-SMS-EMOA | RL-RP |
+|---|---|---|---|---|
+| HVR (D1) | **6** | 5 | 2 | 1 |
+| IGD+ (D2) | **6** | 5 | 2 | 1 |
+| Eratio (D3) | **11** | 0 | 0 | 3 |
+| Anytime (D4) | **5** | 4 | 4 | 1 |
+
+**El punto de referencia fijo trivial (1+1/H) es el método más fuerte.** Con
+los baselines honestos y el protocolo completo, RL-RP-SMS-EMOA no supera a
+ninguno de ellos de forma sistemática.
+
+### El hallazgo central: no es que RL-RP sea peor, es que es *inestable*
+
+IQR mediano de HVR sobre las 30 semillas:
+
+| balanced | R2-EMOA | d-SMS-EMOA | RL-RP |
+|---|---|---|---|
+| 0.0067 | 0.0180 | 0.0203 | **0.0909** |
+
+RL-RP es **14 veces más variable** que el punto fijo. En 7 de 14 problemas su
+IQR supera 0.1:
+
+```
+problema      HVR mediana   IQR
+minus-dtlz1      0.7569    0.5530
+wfg4             0.6108    0.3918
+wfg9             0.9000    0.3793
+imop8            0.5525    0.3449
+imop6            0.6641    0.3127
+dtlz1            0.9689    0.3002
+imop5            0.8246    0.1035
+```
+
+Nótese dtlz1 (0.9689 frente a 0.9691 de balanced) y wfg9 (0.9000 frente a
+0.9065): **en algunas semillas RL-RP iguala al mejor método**, y en otras se
+desploma. Es exactamente la firma de congelar una caminata aleatoria en un
+instante arbitrario: la traza de una corrida en DTLZ2 alcanza HVR = 0.9408 en
+t ≈ 37 800 —**por encima de cualquier baseline**— y termina en 0.5793 porque
+`t_adapt = ρ·T_max` cae en un punto malo del recorrido de z_ref.
+
+*Caso aparte:* en DTLZ2 el IQR de RL-RP es 2.7×10⁻⁵, es decir **las 30
+semillas convergen al mismo mal valor** (0.5793). Ahí no hay varianza: hay un
+atractor determinista. Merece investigarse por separado.
+
+### d-SMS-EMOA: buena trayectoria, mal punto final
+
+Gana 4 de 14 en anytime (D4) pero sólo 2 en HVR final, y es el método que más
+se **degrada** (anytime > final en 4 de 14 problemas, hasta +0.106). En DTLZ2,
+WFG4 y minus-DTLZ2 su curva anytime empata o supera a la del punto fijo
+mientras su valor final queda claramente por debajo.
+
+La explicación es mecánica y estaba predicha por el diseño: el calendario
+termina en **r = 1**, exactamente sobre el nadir, donde las soluciones
+extremas aportan hipervolumen cero. El barrido de 10 a 1 compra dispersión
+temprana y la paga al final. Es un resultado limpio a favor de la tesis: *el
+calendario del punto de referencia sí importa para el comportamiento anytime,
+pero su punto de llegada decide la calidad final*.
+
+### Dos problemas que rompen el patrón
+
+- **IMOP5** (ocho parches disconexos) es el único donde el punto fijo
+  **fracasa**: HVR 0.2818 frente a 0.885 (R2), 0.860 (d-SMS) y 0.825 (RL-RP).
+  El único caso del conjunto donde adaptar el PR paga claramente.
+- **IMOP7** (banda delgada): los cuatro métodos empatan en HVR = 0.1731.
+  Ninguno resuelve el problema y el punto de referencia es irrelevante.
+
+### R2-EMOA confirma la hipótesis pre-registrada de la sección 12
+
+R2-EMOA gana 5 de 14 en HVR e IGD+, y **cuatro de esos cinco son problemas
+irregulares o invertidos**: IMOP2, IMOP4, IMOP6 y Minus-DTLZ2 (más IMOP5 como
+segundo). Es literalmente lo que la sección 12 anticipó: *"si R2-EMOA gana en
+Minus-DTLZ/IMOP, ajustar z_ref es optimizar la perilla equivocada"*. En esas
+geometrías el cuello de botella no es dónde está el punto de referencia sino
+que la selección por hipervolumen es la herramienta equivocada.
+
+### Lo que RL-RP sí consigue
+
+Gana 3 de 14 en **Eratio** (uniformidad), el término que su recompensa
+optimiza explícitamente vía la energía de Riesz. El planeador optimiza lo que
+se le pide; el problema es que lo que se le pide no es lo que mide el
+desempeño. Consistente con la sección 14: la recompensa no es débil, está
+*mal especificada*.
+
+### Siguiente experimento, ahora sí motivado por datos
+
+Congelar z_ref en el **mejor estado visto** durante la adaptación en vez de en
+`ρ·T_max`. Toda la evidencia apunta ahí: el planeador visita puntos de
+referencia excelentes y no los conserva. Es un argmax sobre una columna que ya
+se registra en cada generación, y convierte el IQR de 0.55 en el objeto de
+estudio en lugar de en ruido.
+
+---
+
+## 16. Otros bugs corregidos
 
 - `hypervolume` calculaba la máscara de puntos dominantes y **la ignoraba**.
 - `select_subaction` usaba `argmax` sobre una fila de ceros → devolvía siempre
