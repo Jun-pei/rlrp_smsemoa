@@ -26,6 +26,11 @@ holding the shared reference set, and <outdir>/verify.csv.
 
     F_raw    (n, m)  final non-dominated objective vectors, raw units
     F_frame  (n, m)  the same, normalised into the shared evaluation frame
+
+``F_raw`` and ``F_frame`` hold the same points in the same order, so row i of
+one is row i of the other.  Both are the non-dominated subset of the final
+population: the dominated members are of no interest for a front plot, and
+keeping them would make the two arrays differ in length.
     Zhat     (N, m)  reference set in that frame  (in reference_<problem>.npz)
     zext     (m,)    external HV reference point, (1 + kappa) * 1
 """
@@ -108,6 +113,7 @@ def main():
     problem_n_obj = importlib.import_module(f"{pkg}.problems").problem_n_obj
     METHODS = importlib.import_module(f"{pkg}.algorithm").METHODS
     get_frame = importlib.import_module(f"{pkg}.experiment").get_frame
+    nondominated = importlib.import_module(f"{pkg}.indicators").nondominated
 
     results = pd.read_csv(args.results)
     work = build_worklist(results, args.mode)
@@ -146,9 +152,15 @@ def main():
         if not ok:
             bad += 1
 
+        # The methods return the whole final POPULATION, which on a
+        # steady-state EMOA still contains dominated members.  Store the
+        # non-dominated subset, and derive F_frame from that same subset so
+        # the two arrays agree row for row (ND filtering is idempotent, so
+        # this leaves F_frame identical to to_frame(F)).
+        F_nd = F[nondominated(F)] if F.shape[0] > 1 else F
         np.savez_compressed(
             os.path.join(args.outdir, f"{p}__{meth}__seed{seed:03d}.npz"),
-            F_raw=F, F_frame=frame.to_frame(F), problem=p, method=meth,
+            F_raw=F_nd, F_frame=frame.to_frame(F_nd), problem=p, method=meth,
             seed=seed, tag=tag, m=m_eff, hvr=hvr_new)
 
         rows.append(dict(problem=p, method=meth, seed=seed, tag=tag,
