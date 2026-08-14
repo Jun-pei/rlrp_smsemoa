@@ -219,6 +219,10 @@ def main():
         print(f"=== {pname} (m={m_eff}, {args.n_seeds} seeds x {len(methods)} "
               f"methods, T_max={args.t_max}) ===")
         df = run_problem(pname, methods, args.n_seeds, args)
+        # Re-assert the directory: a long task can outlive the tree it was
+        # started with (a stray rm, a scratch cleaner), and losing hours of
+        # completed runs at the final write would be gratuitous.
+        os.makedirs(args.outdir, exist_ok=True)
         df.to_csv(os.path.join(args.outdir, f"results_{pname}.csv"), index=False)
         all_dfs.append(df)
 
