@@ -31,6 +31,8 @@ rlrp_smsemoa/
 ├── stats.py                # Wilcoxon+Bonferroni, Friedman, Quade
 ├── run_full_experiment.py  # the Sec. 5.3 protocol (CLI)
 ├── run_sensitivity.py      # the Sec. 5.3 a-c sweeps (CLI)
+├── aggregate_results.py    # merge per-task results into the reported tables
+├── dump_fronts.py          # re-run selected cells and save their final fronts
 └── tests_reference_sets.py # validation of every Z used for IGD+
 ```
 
