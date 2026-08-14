@@ -176,30 +176,41 @@ source activate rlrp
 pip install -r requirements.txt       # cp313 wheels exist for all four
 ```
 
-One array task per problem, all methods and seeds inside the task:
+One array task per (problem, method) pair, 30 seeds inside the task:
 
 ```bash
-sbatch --array=0-13 slurm/run_array.sbatch
+mkdir -p logs
+sbatch --array=0-55 slurm/run_array.sbatch
 ```
+
+The array is idempotent: `--skip_existing` means resubmitting it re-runs only
+the cells whose history is not yet on disk, so a partial grid is finished by
+submitting again.
 
 The workload is pure CPU (numpy / pymoo); there is no GPU code path, so it
 belongs on a CPU-only partition. Peak memory is ~400 MB per concurrent run at
 `T_max = 100000` — the per-generation history is held in RAM until the run
 ends — hence `--mem-per-cpu=2G`. The partition, core count and wall clock in
 the script are set for ixachi's `gold5320` (52-core, 256 GB nodes); override
-with `sbatch --partition=... --array=0-13 slurm/run_array.sbatch` elsewhere.
+with `sbatch --partition=... --array=0-55 slurm/run_array.sbatch` elsewhere.
+Workers are derived from PHYSICAL cores, not the hyperthread count `sinfo`
+reports, because oversubscription dominates throughput: measured 1.17 h per
+run at one task per node, 5.3 h at two, 16 h at four.
 
-Each task writes its summary CSVs to `results/full/<problem>/` and its
-per-generation histories into the shared `results/full/history/` tree. When
-every task has finished, merge them:
+Each task writes its summary CSVs to `results/full/<problem>__<method>/` and
+its per-generation histories into the shared `results/full/history/` tree.
+When every task has finished, merge them:
 
 ```bash
-python3 aggregate_results.py --root results/full --outdir results/full
+python3 aggregate_results.py --histdir results/full/history --outdir results/full
 ```
 
-Time to target (D5) is recomputed during the merge, because it is defined
+`--histdir` rebuilds every summary row from the histories, so the merge works
+whatever happened to the individual tasks; `--root` instead reads the tasks'
+own summary CSVs, which a task killed at its wall clock never writes. Time to
+target (D5) is recomputed during the merge either way, because it is defined
 relative to the best HVR reached by *any* method on that (problem, seed) and
-each array task only saw its own problem.
+each array task only saw its own cell.
 
 **Sizing.** Measured at `mu=100`, `T_max=100000`, `eval_every=1`, one core per
 run: roughly **1 core-hour per run** on a 3-objective DTLZ/WFG problem
