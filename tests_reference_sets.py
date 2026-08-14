@@ -106,7 +106,46 @@ def check(name: str, m: int = 3, n_ref: int = 2000, n_sample: int = 8000,
                 rel_dist_p95=float(np.percentile(d, 95) / span))
 
 
+def check_determinism(name: str, m: int = 3, n_ref: int = 2000) -> bool:
+    """Is Z the same set every time it is built?
+
+    It must be: HVR divides by HV(Z) and IGD+/Eratio are measured against Z, so
+    an unstable Z makes those indicators incomparable BETWEEN RUNS -- and the
+    experiment builds the frame independently in every worker process.
+
+    pymoo does not give most WFG problems an analytical front; they fall back
+    to a sampler that draws 200 x 200 random interior points with an
+    OS-entropy seed.  ``problems._pinned_pymoo_rng`` pins it.  This check is
+    what catches that pin breaking, e.g. after a pymoo upgrade.
+    """
+    m_eff = problem_n_obj(name, m)
+    a = reference_set(name, m=m_eff, n_points=n_ref)
+    b = reference_set(name, m=m_eff, n_points=n_ref)
+    return a.shape == b.shape and np.array_equal(a, b)
+
+
 def main():
+    import argparse
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--determinism", action="store_true",
+                    help="also rebuild every Z twice and check it is identical "
+                         "(slow; run it after upgrading pymoo)")
+    args = ap.parse_args()
+
+    if args.determinism:
+        print(f"{'problem':14s} {'Z estable':>10s}")
+        bad = []
+        for name in PROBLEM_NAMES:
+            ok = check_determinism(name)
+            if not ok:
+                bad.append(name)
+            print(f"{name:14s} {str(ok):>10s}{'   <-- NO DETERMINISTA' if not ok else ''}")
+        if bad:
+            raise SystemExit(f"\nnon-deterministic reference sets: {bad}\n"
+                             f"every indicator measured against them is "
+                             f"incomparable between runs.")
+        print()
+
     print(f"{'problem':14s} {'m':>2s} {'|Z|':>6s} {'Z dominados':>12s} "
           f"{'d_rel medio':>12s} {'d_rel p95':>10s}")
     for name in PROBLEM_NAMES:

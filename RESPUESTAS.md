@@ -598,6 +598,41 @@ temprana y la paga al final. Es un resultado limpio a favor de la tesis: *el
 calendario del punto de referencia sí importa para el comportamiento anytime,
 pero su punto de llegada decide la calidad final*.
 
+### ⚠ Salvedad sobre WFG4: los números de esa fila hay que recalcularlos
+
+Al regenerar los frentes finales (`dump_fronts.py`, que revalida cada corrida
+contra su HVR registrado) **las 6 celdas de WFG4 fallaron la verificación** y
+ninguna de las otras 78 falló. Diferencias de 1×10⁻³ a 5×10⁻³, frente a
+5×10⁻⁹ en todo lo demás.
+
+**Causa.** pymoo no le da frente analítico a WFG4: cae en
+`WFG._calc_pareto_front`, que **aproxima el frente por muestreo aleatorio**
+(200 iteraciones × 200 puntos interiores) con una semilla tomada de la
+entropía del sistema. Como el experimento construye el marco de referencia
+**en cada proceso trabajador por separado**, cada worker usó una Z distinta.
+Medido: HV(Z) de WFG4 pasó de 0.75571 a 0.75061 entre dos procesos, un 0.7 %.
+WFG9 no se ve afectado porque sí sobreescribe `_calc_pareto_front` con una
+versión determinista.
+
+**Alcance.** Sólo WFG4, y sólo en los tres indicadores externos (HVR, IGD+,
+Eratio), que se miden contra Z. La búsqueda misma es correcta y reproducible:
+las poblaciones finales de WFG4 se regeneran bit a bit. Las diferencias
+(≤0.5 %) son dos órdenes de magnitud menores que las que separan a los métodos
+en WFG4 (0.9928 / 0.9190 / 0.8742 / 0.6108), así que **el orden de la tabla no
+cambia**, pero la precisión reportada para esa fila está sobreestimada y su IQR
+está inflado.
+
+**Corregido** en `problems._pinned_pymoo_rng`: el muestreador queda fijado a
+una semilla constante, de modo que Z vuelve a ser una propiedad del problema
+como exige la sección 2 de `performance.py`. Verificado idéntico en tres
+procesos independientes.
+`tests_reference_sets.py --determinism` reconstruye cada Z dos veces y falla si
+alguna difiere, para que una futura actualización de pymoo no reintroduzca esto
+en silencio.
+
+**Pendiente:** volver a correr las 120 celdas de WFG4 con la Z fija. No hace
+falta tocar ningún otro problema.
+
 ### Dos problemas que rompen el patrón
 
 - **IMOP5** (ocho parches disconexos) es el único donde el punto fijo

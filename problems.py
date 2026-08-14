@@ -36,6 +36,7 @@ reference set produced here is checked in ``tests_reference_sets.py``.
 """
 
 from __future__ import annotations
+from contextlib import contextmanager
 import numpy as np
 from pymoo.problems import get_problem as _pymoo_get_problem
 from pymoo.util.ref_dirs import get_reference_directions
@@ -79,10 +80,11 @@ class PymooWrapper(Problem):
 
     def pareto_front(self, n_points: int = 5000) -> np.ndarray:
         rd = _lattice(self.n_obj, n_points)
-        try:
-            return np.atleast_2d(self._p.pareto_front(rd))
-        except TypeError:                       # problems that take no ref_dirs
-            return np.atleast_2d(self._p.pareto_front())
+        with _pinned_pymoo_rng(self._p):
+            try:
+                return np.atleast_2d(self._p.pareto_front(rd))
+            except TypeError:                   # problems that take no ref_dirs
+                return np.atleast_2d(self._p.pareto_front())
 
 
 class MinusWrapper(Problem):
@@ -136,6 +138,51 @@ class MinusWrapper(Problem):
 
     def pareto_front(self, n_points: int = 5000) -> np.ndarray:
         return -self.scale * self._base.pareto_front(n_points)
+
+
+#: seed pinning pymoo's stochastic Pareto-front sampler
+PF_SEED = 0
+
+
+@contextmanager
+def _pinned_pymoo_rng(pymoo_problem):
+    """Make ``pymoo_problem.pareto_front()`` deterministic.
+
+    Most WFG problems do NOT have an analytical front in pymoo: ``WFG4`` and
+    friends fall back to ``WFG._calc_pareto_front``, which APPROXIMATES the
+    front by iterative random sampling (200 iterations x 200 random interior
+    points).  Its RNG comes from the ``@default_random_state`` decorator whose
+    default seed is ``None``, i.e. OS entropy, so a fresh reference set is
+    drawn in every process.
+
+    That is not a cosmetic issue.  HVR divides by HV(Z), and IGD+ and Eratio
+    are measured against Z, so an unstable Z makes those indicators
+    incomparable between runs -- measured on WFG4, HV(Z) moved from 0.75571 to
+    0.75061 between two processes, about 0.7%.  WFG9 is unaffected because it
+    overrides ``_calc_pareto_front`` with a deterministic one.
+
+    Pinning the sampler's RNG here makes the reference set a property of the
+    problem again, as ``performance.py`` Section 2 requires.
+    """
+    attr = "_rand_optimal_position"
+    original = getattr(pymoo_problem, attr, None)
+    if original is None:                       # deterministic problem, nothing to do
+        yield
+        return
+    rng = np.random.default_rng(PF_SEED)
+    k = getattr(pymoo_problem, "k", None)
+
+    def _fixed(n, *a, **kw):
+        return rng.random((n, k))
+
+    try:
+        setattr(pymoo_problem, attr, _fixed)
+        yield
+    finally:
+        try:
+            delattr(pymoo_problem, attr)       # restore the bound method
+        except AttributeError:
+            setattr(pymoo_problem, attr, original)
 
 
 def _lattice(m: int, n_points: int) -> np.ndarray:
